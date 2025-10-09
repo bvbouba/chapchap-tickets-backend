@@ -24,7 +24,7 @@ from pytimeparse import parse
 from sentry_sdk.integrations.celery import CeleryIntegration
 from sentry_sdk.integrations.django import DjangoIntegration
 from sentry_sdk.integrations.logging import ignore_logger
-from sentry_sdk.scrubber import DEFAULT_DENYLIST, DEFAULT_PII_DENYLIST, EventScrubber
+from dotenv import load_dotenv
 
 from . import PatchedSubscriberExecutionContext, __version__
 from .account.i18n_rules_override import i18n_rules_override
@@ -36,6 +36,7 @@ from .graphql.executor import patch_executor
 from .graphql.promise import patch_promise
 from .patch_local import patch_local
 
+load_dotenv()
 django_stubs_ext.monkeypatch()
 
 
@@ -113,22 +114,16 @@ DATABASE_CONNECTION_DEFAULT_NAME = "default"
 # This variable should be set to `replica`
 DATABASE_CONNECTION_REPLICA_NAME = "replica"
 
-if "DATABASE_URL_REPLICA" in os.environ:
-    DATABASE_URL_REPLICA_ENV_NAME = "DATABASE_URL_REPLICA"
-else:
-    # If replica env is not set, then always try to use the
-    # default env first.
-    DATABASE_URL_REPLICA_ENV_NAME = dj_database_url.DEFAULT_ENV
+
+DATABASE_URL=os.environ.get("DATABASE_URL")
 
 DATABASES = {
     DATABASE_CONNECTION_DEFAULT_NAME: dj_database_url.config(
-        env=dj_database_url.DEFAULT_ENV,
-        default="postgres://saleor:saleor@localhost:5432/saleor",
+        default=DATABASE_URL,
         conn_max_age=DB_CONN_MAX_AGE,
     ),
     DATABASE_CONNECTION_REPLICA_NAME: dj_database_url.config(
-        env=DATABASE_URL_REPLICA_ENV_NAME,
-        default="postgres://saleor:saleor@localhost:5432/saleor",
+        default=DATABASE_URL,
         # TODO: We need to add read only user to saleor platform,
         # and we need to update docs.
         # default="postgres://saleor_read_only:saleor@localhost:5432/saleor",
