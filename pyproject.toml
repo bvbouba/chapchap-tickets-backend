@@ -84,6 +84,7 @@ dependencies = [
     "django-storages[google]~=1.11",
     "python-magic>=0.4.27,<0.5 ; sys_platform != 'win32'",
     "python-magic-bin>=0.4.14,<0.5 ; sys_platform == 'win32'",
+    "gunicorn>=21.2,<23",
 ]
 
 [project.urls]
@@ -283,4 +284,3 @@ known-first-party = ["saleor"]
 [tool.poetry.dependencies]
 python = ">=3.12,<3.13"
 setuptools = "*"
-gunicorn = "^21.2"
