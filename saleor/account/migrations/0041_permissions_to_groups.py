@@ -12,7 +12,7 @@ def add_users_to_groups_based_on_users_permissions(apps, schema_editor):
     and add the user to it.
     """
     User = apps.get_model("account", "User")
-    Group = apps.get_model("auth", "Group")
+    Group = apps.get_model("saleor_auth", "Group")
 
     groups = Group.objects.all().prefetch_related("permissions")
     counter = get_counter_value(Group)

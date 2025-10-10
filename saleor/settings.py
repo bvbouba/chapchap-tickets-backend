@@ -143,7 +143,7 @@ LOCALE_PATHS = [os.path.join(PROJECT_ROOT, "locale")]
 USE_I18N = True
 USE_TZ = True
 
-FORM_RENDERER = "django.forms.renderers.TemplatesSetting"
+# FORM_RENDERER = "django.forms.renderers.TemplatesSetting"
 
 EMAIL_URL = os.environ.get("EMAIL_URL")
 SENDGRID_USERNAME = os.environ.get("SENDGRID_USERNAME")
@@ -212,9 +212,12 @@ STATICFILES_FINDERS = [
 
 context_processors = [
     "django.template.context_processors.debug",
+    'django.template.context_processors.request',  # Required for admin navigation sidebar
     "django.template.context_processors.media",
     "django.template.context_processors.static",
     "saleor.site.context_processors.site",
+    "django.contrib.auth.context_processors.auth",
+    'django.contrib.messages.context_processors.messages',  # Required for admin messages
 ]
 
 loaders = [
@@ -262,8 +265,11 @@ JWT_MANAGER_PATH = os.environ.get(
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    'django.contrib.sessions.middleware.SessionMiddleware',  # Must be added before AuthenticationMiddleware
     "django.middleware.common.CommonMiddleware",
     "saleor.core.middleware.jwt_refresh_token_middleware",
+    'django.contrib.auth.middleware.AuthenticationMiddleware',  # Required for the admin panel
+    'django.contrib.messages.middleware.MessageMiddleware',    # Required for admin messages
 ]
 
 ENABLE_RESTRICT_WRITER_MIDDLEWARE = get_bool_from_env(
@@ -284,6 +290,10 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "django.contrib.postgres",
     "django_celery_beat",
+    "django.contrib.admin",
+    "django.contrib.auth", 
+    "django.contrib.messages",
+    "django.contrib.sessions", 
     # Local apps
     "saleor.permission",
     "saleor.auth",
@@ -587,6 +597,7 @@ PLACEHOLDER_IMAGES = {
 AUTHENTICATION_BACKENDS = [
     "saleor.core.auth_backend.JSONWebTokenBackend",
     "saleor.core.auth_backend.PluginBackend",
+    'django.contrib.auth.backends.ModelBackend', #admin
 ]
 
 # Expired checkouts settings - defines after what time checkouts will be deleted

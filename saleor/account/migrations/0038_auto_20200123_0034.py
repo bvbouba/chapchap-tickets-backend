@@ -17,7 +17,7 @@ class Migration(migrations.Migration):
                 help_text="Specific permissions for this service.",
                 related_name="service_set",
                 related_query_name="service",
-                to="auth.Permission",
+                to="saleor_auth.Permission",
             ),
         ),
     ]

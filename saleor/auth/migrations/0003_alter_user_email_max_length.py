@@ -3,7 +3,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("auth", "0002_alter_permission_name_max_length"),
+        ("saleor_auth", "0002_alter_permission_name_max_length"),
     ]
 
     operations = [

@@ -344,7 +344,8 @@ class User(
             or not site_settings.enable_account_confirmation_by_email
             or self.is_confirmed
         )
-
+    def has_module_perms(self, app_label):
+        return True  # Allow access to all app modules
 
 class CustomerNote(models.Model):
     user = models.ForeignKey(

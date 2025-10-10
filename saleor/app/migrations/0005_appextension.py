@@ -6,7 +6,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("auth", "0012_alter_user_first_name_max_length"),
+        ("saleor_auth", "0012_alter_user_first_name_max_length"),
         ("app", "0004_auto_20210308_1135"),
     ]
 
@@ -59,7 +59,7 @@ class Migration(migrations.Migration):
                     models.ManyToManyField(
                         blank=True,
                         help_text="Specific permissions for this app extension.",
-                        to="auth.Permission",
+                        to="saleor_auth.Permission",
                     ),
                 ),
             ],

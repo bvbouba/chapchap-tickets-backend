@@ -35,7 +35,7 @@ ALTER INDEX IF EXISTS auth_permission_content_type_id_2f476e4b
 
 
 def rename_permission_table(apps, schema_editor):
-    Permission = apps.get_model("auth", "Permission")
+    Permission = apps.get_model("saleor_auth", "Permission")
     schema_editor.alter_db_table(
         Permission,
         "auth_permission",
@@ -74,7 +74,7 @@ ALTER INDEX IF EXISTS permission_permission_content_type_id_e526e8f2
 
 
 def rename_permission_table_reverse(apps, schema_editor):
-    Permission = apps.get_model("auth", "Permission")
+    Permission = apps.get_model("saleor_auth", "Permission")
     schema_editor.alter_db_table(
         Permission,
         "permission_permission",

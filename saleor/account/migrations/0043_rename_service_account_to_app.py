@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
     dependencies = [
         ("core", "0001_migrate_metadata"),
-        ("auth", "0011_update_proxy_permissions"),
+        ("saleor_auth", "0011_update_proxy_permissions"),
         ("webhook", "0002_webhook_name"),
         ("account", "0042_merge_20200422_0555"),
     ]
@@ -45,7 +45,7 @@ class Migration(migrations.Migration):
                 help_text="Specific permissions for this app.",
                 related_name="app_set",
                 related_query_name="app",
-                to="auth.Permission",
+                to="saleor_auth.Permission",
             ),
         ),
     ]

@@ -14,7 +14,7 @@ def create_plugin_permission(apps):
 def change_extension_permission_to_plugin_permission(apps, schema_editor):
     create_plugin_permission(apps)
 
-    permission = apps.get_model("auth", "Permission")
+    permission = apps.get_model("saleor_auth", "Permission")
     users = apps.get_model("account", "User")
     service_account = apps.get_model("account", "ServiceAccount")
 

@@ -7,7 +7,7 @@ import saleor.account.models
 
 # Forward helpers
 def rename_group_tables(apps, schema_editor):
-    Group = apps.get_model("auth", "Group")
+    Group = apps.get_model("saleor_auth", "Group")
     schema_editor.alter_db_table(
         Group,
         "auth_group",
@@ -35,7 +35,7 @@ ALTER INDEX IF EXISTS auth_group_name_a6ea08ec_like
 
 # Reverse helpers
 def rename_group_tables_reverse(apps, schema_editor):
-    Group = apps.get_model("auth", "Group")
+    Group = apps.get_model("saleor_auth", "Group")
     schema_editor.alter_db_table(
         Group,
         "account_group",
@@ -106,7 +106,7 @@ class Migration(migrations.Migration):
     dependencies = [
         ("account", "0071_user_external_reference"),
         ("app", "0017_app_audience"),
-        ("auth", "0012_alter_user_first_name_max_length"),
+        ("saleor_auth", "0012_alter_user_first_name_max_length"),
     ]
 
     operations = [
@@ -149,7 +149,7 @@ class Migration(migrations.Migration):
                             "permissions",
                             models.ManyToManyField(
                                 blank=True,
-                                to="auth.Permission",
+                                to="saleor_auth.Permission",
                                 verbose_name="permissions",
                             ),
                         ),

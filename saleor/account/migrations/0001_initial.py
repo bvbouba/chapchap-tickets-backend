@@ -4,7 +4,7 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-    dependencies = [("auth", "0006_require_contenttypes_0002")]
+    dependencies = [("saleor_auth", "0006_require_contenttypes_0002")]
 
     replaces = [("userprofile", "0001_initial")]
 
@@ -416,7 +416,7 @@ class Migration(migrations.Migration):
             field=models.ManyToManyField(
                 related_query_name="user",
                 related_name="user_set",
-                to="auth.Group",
+                to="saleor_auth.Group",
                 blank=True,
                 help_text=(
                     "The groups this user belongs to. "
@@ -431,7 +431,7 @@ class Migration(migrations.Migration):
             field=models.ManyToManyField(
                 related_query_name="user",
                 related_name="user_set",
-                to="auth.Permission",
+                to="saleor_auth.Permission",
                 blank=True,
                 help_text="Specific permissions for this user.",
                 verbose_name="user permissions",

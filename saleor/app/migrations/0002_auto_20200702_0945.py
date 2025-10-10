@@ -5,7 +5,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("auth", "0011_update_proxy_permissions"),
+        ("saleor_auth", "0011_update_proxy_permissions"),
         ("app", "0001_initial"),
     ]
 
@@ -101,7 +101,7 @@ class Migration(migrations.Migration):
                         help_text="Specific permissions which will be assigned to app.",
                         related_name="app_installation_set",
                         related_query_name="app_installation",
-                        to="auth.Permission",
+                        to="saleor_auth.Permission",
                     ),
                 ),
             ],

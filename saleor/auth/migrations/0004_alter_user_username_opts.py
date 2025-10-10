@@ -4,7 +4,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("auth", "0003_alter_user_email_max_length"),
+        ("saleor_auth", "0003_alter_user_email_max_length"),
     ]
 
     # No database changes; modifies validators and error_messages (#13147).

@@ -69,7 +69,7 @@ class Migration(migrations.Migration):
                 (
                     "permissions",
                     models.ManyToManyField(
-                        to="auth.Permission", verbose_name="permissions", blank=True
+                        to="saleor_auth.Permission", verbose_name="permissions", blank=True
                     ),
                 ),
             ],
@@ -164,7 +164,7 @@ class Migration(migrations.Migration):
                 (
                     "groups",
                     models.ManyToManyField(
-                        to="auth.Group",
+                        to="saleor_auth.Group",
                         verbose_name="groups",
                         blank=True,
                         related_name="user_set",
@@ -178,7 +178,7 @@ class Migration(migrations.Migration):
                 (
                     "user_permissions",
                     models.ManyToManyField(
-                        to="auth.Permission",
+                        to="saleor_auth.Permission",
                         verbose_name="user permissions",
                         blank=True,
                         help_text="Specific permissions for this user.",

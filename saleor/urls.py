@@ -1,8 +1,10 @@
 from django.conf import settings
 from django.conf.urls.static import static
 from django.contrib.staticfiles.views import serve
-from django.urls import re_path
+from django.urls import include, re_path,path
 from django.views.decorators.csrf import csrf_exempt
+from django.contrib import admin
+
 
 from .core.views import jwks
 from .graphql.api import backend, schema
@@ -16,6 +18,7 @@ from .product.views import digital_product
 from .thumbnail.views import handle_thumbnail
 
 urlpatterns = [
+    path('admin', admin.site.urls),
     re_path(
         r"^graphql/$",
         csrf_exempt(GraphQLView.as_view(backend=backend, schema=schema)),

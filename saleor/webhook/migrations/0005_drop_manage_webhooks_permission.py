@@ -4,8 +4,8 @@ from django.db import migrations
 
 
 def change_webhook_permission_to_app_permission(apps, schema_editor):
-    Permission = apps.get_model("auth", "Permission")
-    Group = apps.get_model("auth", "Group")
+    Permission = apps.get_model("saleor_auth", "Permission")
+    Group = apps.get_model("saleor_auth", "Group")
     App = apps.get_model("app", "App")
 
     manage_webhooks = Permission.objects.filter(

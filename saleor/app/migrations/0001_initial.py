@@ -39,7 +39,7 @@ def update_contentypes_reverse(apps, schema_editor):
 
 
 def convert_service_account_permissions_to_app_permissions(apps, schema_editor):
-    Permission = apps.get_model("auth", "Permission")
+    Permission = apps.get_model("saleor_auth", "Permission")
     service_account_permission = Permission.objects.filter(
         codename="manage_service_accounts", content_type__app_label="app"
     ).first()
@@ -53,7 +53,7 @@ class Migration(migrations.Migration):
     initial = True
 
     dependencies = [
-        ("auth", "0011_update_proxy_permissions"),
+        ("saleor_auth", "0011_update_proxy_permissions"),
         ("account", "0044_unmount_app_and_app_token"),
     ]
 
@@ -80,7 +80,7 @@ class Migration(migrations.Migration):
                         help_text="Specific permissions for this app.",
                         related_name="app_set",
                         related_query_name="app",
-                        to="auth.Permission",
+                        to="saleor_auth.Permission",
                     ),
                 ),
                 (

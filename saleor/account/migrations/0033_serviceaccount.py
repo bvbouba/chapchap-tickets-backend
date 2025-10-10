@@ -9,7 +9,7 @@ import saleor.core.utils.json_serializer
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("auth", "0011_update_proxy_permissions"),
+        ("saleor_auth", "0011_update_proxy_permissions"),
         ("account", "0032_remove_user_token"),
     ]
 
@@ -62,7 +62,7 @@ class Migration(migrations.Migration):
                         help_text="Specific permissions for this service.",
                         related_name="service_set",
                         related_query_name="service",
-                        to="auth.Permission",
+                        to="saleor_auth.Permission",
                         verbose_name="service account permissions",
                     ),
                 ),

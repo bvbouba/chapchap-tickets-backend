@@ -17,7 +17,7 @@ WARNING = """
 def update_proxy_model_permissions(apps, schema_editor, reverse=False):  # noqa: D205, D212, D400, D415
     """Update the content_type of proxy model permissions to use the ContentType of the proxy model."""
     style = color_style()
-    Permission = apps.get_model("auth", "Permission")
+    Permission = apps.get_model("saleor_auth", "Permission")
     ContentType = apps.get_model("contenttypes", "ContentType")
     alias = schema_editor.connection.alias
     for Model in apps.get_models():
@@ -60,7 +60,7 @@ def revert_proxy_model_permissions(apps, schema_editor):  # noqa: D205, D212, D4
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("auth", "0010_alter_group_name_max_length"),
+        ("saleor_auth", "0010_alter_group_name_max_length"),
         ("contenttypes", "0002_remove_content_type_name"),
     ]
     operations = [
