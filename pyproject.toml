@@ -283,3 +283,4 @@ known-first-party = ["saleor"]
 [tool.poetry.dependencies]
 python = ">=3.12,<3.13"
 setuptools = "*"
+gunicorn = "^21.2"
