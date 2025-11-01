@@ -22,6 +22,7 @@ from ...product.models import (
     CollectionChannelListing,
     Product,
     ProductChannelListing,
+    ProductVariantChannelListing
 )
 from ..core.descriptions import CHANNEL_REQUIRED
 from ..core.doc_category import DOC_CATEGORY_PRODUCTS
@@ -304,6 +305,7 @@ class ProductOrder(ChannelSortInputObjectType):
 
 class ProductVariantSortField(BaseEnum):
     LAST_MODIFIED_AT = ["updated_at", "name", "pk"]
+    PRICE = ["price_amount", "pk"]  # new field
 
     class Meta:
         doc_category = DOC_CATEGORY_PRODUCTS
@@ -311,12 +313,24 @@ class ProductVariantSortField(BaseEnum):
     @property
     def description(self):
         descriptions = {
-            ProductVariantSortField.LAST_MODIFIED_AT.name: "last modification date.",  # type: ignore[attr-defined] # noqa: E501
+            ProductVariantSortField.LAST_MODIFIED_AT.name: "last modification date.",
+            ProductVariantSortField.PRICE.name: "variant price.",  # new description
         }
         if self.name in descriptions:
             return f"Sort product variants by {descriptions[self.name]}"
-
         raise ValueError(f"Unsupported enum value: {self.value}")
+
+    @staticmethod
+    def qs_with_price(queryset: QuerySet, channel_slug: str) -> QuerySet:
+        return queryset.annotate(
+            price_amount=Subquery(
+                ProductVariantChannelListing.objects.filter(
+                    variant_id=OuterRef("pk"),
+                    channel__slug=str(channel_slug),
+                )
+                .values("price_amount")[:1]
+            )
+        )
 
 
 class ProductVariantSortingInput(SortInputObjectType):

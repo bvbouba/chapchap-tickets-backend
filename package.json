@@ -20,6 +20,7 @@
     "release-it": "^19.0.4"
   },
   "scripts": {
+    "build-schema": "python manage.py get_graphql_schema > saleor/graphql/schema.graphql",
     "release": "release-it"
   }
 }

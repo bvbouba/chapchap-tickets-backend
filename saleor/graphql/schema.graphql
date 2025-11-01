@@ -1380,6 +1380,18 @@ type Query {
   """
   channels: [Channel!] @doc(category: "Channels")
 
+  """Recherche une valeur d’attribut par ID, slug ou référence externe."""
+  attributeValue(
+    """ID global de la valeur d’attribut."""
+    id: ID
+
+    """Slug de la valeur d’attribut."""
+    slug: String
+
+    """Référence externe de la valeur d’attribut."""
+    externalReference: String
+  ): AttributeValue @doc(category: "Attributes")
+
   """List of the shop's attributes."""
   attributes(
     """Filtering options for attributes."""
@@ -8324,6 +8336,9 @@ input ProductVariantSortingInput @doc(category: "Products") {
 enum ProductVariantSortField @doc(category: "Products") {
   """Sort product variants by last modification date."""
   LAST_MODIFIED_AT
+
+  """Sort product variants by variant price."""
+  PRICE
 }
 
 input MediaSortingInput @doc(category: "Products") {

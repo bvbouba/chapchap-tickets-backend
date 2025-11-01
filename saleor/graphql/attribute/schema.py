@@ -29,7 +29,7 @@ from .mutations import (
 )
 from .resolvers import resolve_attributes
 from .sorters import AttributeSortingInput
-from .types import Attribute, AttributeCountableConnection
+from .types import Attribute, AttributeCountableConnection, AttributeValue
 
 
 class AttributeQueries(graphene.ObjectType):
@@ -103,3 +103,33 @@ class AttributeMutations(graphene.ObjectType):
     attribute_value_bulk_translate = AttributeValueBulkTranslate.Field()
     attribute_value_translate = AttributeValueTranslate.Field()
     attribute_reorder_values = AttributeReorderValues.Field()
+
+class AttributeValueQueries(graphene.ObjectType):
+    attribute_value = BaseField(
+        AttributeValue,
+        id=graphene.Argument(
+            graphene.ID,
+            description="ID global de la valeur d’attribut."
+        ),
+        slug=graphene.Argument(
+            graphene.String,
+            description="Slug de la valeur d’attribut."
+        ),
+        external_reference=graphene.Argument(
+            graphene.String,
+            description="Référence externe de la valeur d’attribut."
+        ),
+        description="Recherche une valeur d’attribut par ID, slug ou référence externe.",
+        doc_category=DOC_CATEGORY_ATTRIBUTES,
+    )
+
+    def resolve_attribute_value(
+        self, info: ResolveInfo, *, id=None, slug=None, external_reference=None
+    ):
+        # Rechercher une valeur d’attribut par ID, slug ou external_reference
+        attribute_value = resolve_by_global_id_slug_or_ext_ref(
+            info, models.AttributeValue, id, slug, external_reference
+        )
+        if attribute_value:
+            return ChannelContext(node=attribute_value, channel_slug=None)
+        return None
