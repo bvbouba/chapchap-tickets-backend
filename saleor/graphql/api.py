@@ -49,6 +49,8 @@ from .warehouse.schema import (
 )
 from .webhook.schema import WebhookMutations, WebhookQueries
 from .webhook.subscription_types import WEBHOOK_TYPES_MAP, Subscription
+from ..otp.graphql.schema import OTPMutations,OTPQueries
+
 
 API_PATH = SimpleLazyObject(lambda: reverse("api"))
 
@@ -77,6 +79,7 @@ class Query(
     TranslationQueries,
     WarehouseQueries,
     WebhookQueries,
+    OTPQueries
 ):
     pass
 
@@ -106,6 +109,7 @@ class Mutation(
     TaxMutations,
     WarehouseMutations,
     WebhookMutations,
+    OTPMutations
 ):
     pass
 

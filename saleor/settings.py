@@ -333,6 +333,8 @@ INSTALLED_APPS = [
     "saleor.app",
     "saleor.thumbnail",
     "saleor.schedulers",
+    #added apps
+    "saleor.otp",
     # External apps
     "django_measurement",
     "mptt",
