@@ -46,6 +46,7 @@ from . import (
     ORDER_EDITABLE_STATUS,
     FulfillmentLineData,
     FulfillmentStatus,
+    OrderAuthorizeStatus,
     OrderChargeStatus,
     OrderOrigin,
     OrderStatus,
@@ -314,6 +315,9 @@ def order_created(
         order,
         webhook_event_map=webhook_event_map,
     )
+    from ..staff_notifications.tasks import send_incoming_order_push
+
+    send_incoming_order_push.delay(order.id)
     payment = order_info.payment
     if payment and order.is_pre_authorized():
         order_authorized(
@@ -339,7 +343,13 @@ def order_created(
         )
 
     channel = order_info.channel
-    if channel.automatically_confirm_all_new_orders:
+    if (
+        channel.automatically_confirm_all_new_orders
+        and not (
+            order.authorize_status == OrderAuthorizeStatus.FULL
+            and order.charge_status not in [OrderChargeStatus.FULL, OrderChargeStatus.OVERCHARGED]
+        )
+    ):
         order_confirmed(order, user, app, manager, webhook_event_map=webhook_event_map)
 
 

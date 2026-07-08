@@ -335,6 +335,7 @@ INSTALLED_APPS = [
     "saleor.schedulers",
     #added apps
     "saleor.otp",
+    "saleor.staff_notifications",
     # External apps
     "django_measurement",
     "mptt",

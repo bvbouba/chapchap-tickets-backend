@@ -2,7 +2,7 @@ from django.utils.translation import gettext_lazy as _
 import os
 from twilio.rest import Client
 from ..utils import  check_user_exists_in_saleor
-
+from twilio.base.exceptions import TwilioRestException
 
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID") 
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN") 
@@ -32,20 +32,26 @@ def resolve_verify_otp(phone_number, code):
 
     client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
-    verification_check = client.verify \
-        .v2 \
-        .services(VERIFY_SERVICE_SID) \
-        .verification_checks \
-        .create(to=phone_number, code=code)
-
-    if verification_check.status == "approved":
-        user_exists = check_user_exists_in_saleor(phone_number)
-        if user_exists:
-            return {"status": "existing_user", "message": "User verified, proceed to login."}
+    try:
+        verification_check = client.verify \
+            .v2 \
+            .services(VERIFY_SERVICE_SID) \
+            .verification_checks \
+            .create(to=phone_number, code=code)
+            
+        if verification_check.status == "approved":
+            user_exists = check_user_exists_in_saleor(phone_number)
+            if user_exists:
+                return {"status": "existing_user", "message": "User verified, proceed to login."}
+            else:
+                return {"status": "new_user", "message": "User verified, proceed to registration."}
         else:
-            return {"status": "new_user", "message": "User verified, proceed to registration."}
-    else:
-        return {"error": "Invalid code."}
+            return {"error": "Invalid code."}
+
+    except TwilioRestException as e:
+        # This will catch the 404 and return it as a string instead of crashing Saleor
+        print(f"Twilio Error: {e}")
+        return {"error": "Verification service configuration error or resource not found."}
 
     
 

@@ -272,6 +272,13 @@ def filter_by_checkout_tokens(qs, _, values):
     return qs.filter(checkout_token__in=values)
 
 
+def filter_by_variant_id(qs, _, value):
+    if not value:
+        return qs
+    _, variant_pk = from_global_id_or_error(value, only_type="ProductVariant")
+    return qs.filter(lines__variant_id=variant_pk).distinct()
+
+
 def filter_has_invoices(qs, value):
     if value is None:
         return qs.none()
@@ -396,10 +403,18 @@ class OrderFilter(DraftOrderFilter):
         input_class=graphene.String, method=filter_by_order_number
     )
     checkout_ids = GlobalIDMultipleChoiceFilter(method=filter_checkouts)
+    variant_id = ObjectTypeFilter(input_class=graphene.ID, method=filter_by_variant_id)
 
     class Meta:
         model = Order
-        fields = ["payment_status", "status", "customer", "created", "search"]
+        fields = [
+            "payment_status",
+            "status",
+            "customer",
+            "created",
+            "search",
+            "variant_id",
+        ]
 
     def is_valid(self):
         if "ids" in self.data and "numbers" in self.data:

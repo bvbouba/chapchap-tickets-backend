@@ -531,6 +531,10 @@ class OrderEvent(
         OrderEventDiscountObject, description="The discount applied to the order."
     )
     reference = graphene.String(description="The reference of payment's transaction.")
+    order = graphene.Field(
+        lambda: Order,
+        description="The order this event belongs to.",
+    )
 
     class Meta:
         default_resolver = (
@@ -791,6 +795,19 @@ class OrderEvent(
     @staticmethod
     def resolve_reference(root: SyncWebhookControlContext[models.OrderEvent], _info):
         return root.node.parameters.get("reference")
+
+    @staticmethod
+    def resolve_order(root: SyncWebhookControlContext[models.OrderEvent], info):
+        def _wrap_with_sync_webhook_control_context(order):
+            if not order:
+                return None
+            return SyncWebhookControlContext(
+                node=order, allow_sync_webhooks=root.allow_sync_webhooks
+            )
+
+        return OrderByIdLoader(info.context).load(root.node.order_id).then(
+            _wrap_with_sync_webhook_control_context
+        )
 
 
 class OrderEventCountableConnection(CountableConnection):

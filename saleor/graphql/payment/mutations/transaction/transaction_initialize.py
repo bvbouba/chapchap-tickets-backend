@@ -5,6 +5,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 
 from .....app.models import App
+from .....channel import TransactionFlowStrategy
 from .....channel.models import Channel
 from .....checkout import models as checkout_models
 from .....checkout.utils import activate_payments, cancel_active_payments
@@ -95,9 +96,20 @@ class TransactionInitialize(TransactionSessionBase):
         error_type_class = common_types.TransactionInitializeError
 
     @classmethod
-    def clean_action(cls, info, action: str | None, channel: "Channel"):
+    def clean_action(
+        cls,
+        info,
+        action: str | None,
+        channel: "Channel",
+        source_object,
+    ):
         if not action:
             return channel.default_transaction_flow_strategy
+        if (
+            action == TransactionFlowStrategy.AUTHORIZATION
+            and isinstance(source_object, checkout_models.Checkout)
+        ):
+            return action
         app = get_app_promise(info.context).get()
         if not app or not app.has_perm(PaymentPermissions.HANDLE_PAYMENTS):
             raise PermissionDenied(permissions=[PaymentPermissions.HANDLE_PAYMENTS])
@@ -164,7 +176,7 @@ class TransactionInitialize(TransactionSessionBase):
             cls.validate_checkout(source_object)
 
         idempotency_key = cls.clean_idempotency_key(idempotency_key)
-        action = cls.clean_action(info, action, source_object.channel)
+        action = cls.clean_action(info, action, source_object.channel, source_object)
         customer_ip_address = clean_customer_ip_address(
             info,
             customer_ip_address,

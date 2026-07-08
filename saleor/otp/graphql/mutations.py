@@ -54,32 +54,43 @@ class RequestPasswordResetOTP(BaseMutation):
 
     @classmethod
     def perform_mutation(cls, _root, info, phone_number):
+        # 1. Check if user exists first (Saves SMS cost)
+        # Using your virtual email logic:
         email = f"{phone_number}@chapchaptickets.com"
         user = retrieve_user_by_email(email)
         
-        # We always return "Success" to prevent user enumeration (security)
-        if user and user.is_active:
-            # Check rate limiting
-            if user.last_password_reset_request:
-                delta = timezone.now() - user.last_password_reset_request
-                if delta.total_seconds() < settings.RESET_PASSWORD_LOCK_TIME:
-                    return RequestPasswordResetOTP()
+        # If user doesn't exist or isn't active, we exit early
+        # Note: We don't raise an error here to prevent "User Enumeration" 
+        # (Hackers checking which numbers are registered)
+        if not user or not user.is_active:
+            return RequestPasswordResetOTP()
 
-            # 1. Generate Saleor Token
-            token = token_generator.make_token(user)
+        # 2. Check Rate Limiting (Prevent spamming the same user)
+        if user.last_password_reset_request:
+            delta = timezone.now() - user.last_password_reset_request
+            if delta.total_seconds() < settings.RESET_PASSWORD_LOCK_TIME:
+                return RequestPasswordResetOTP()
 
-            # 2. Save to our custom PasswordResetToken model
-            PasswordResetToken.objects.update_or_create(
-                phone_number=phone_number,
-                defaults={"token": token, "is_used": False, "created_at": timezone.now()}
-            )
+        # 3. Generate Saleor Token
+        token = token_generator.make_token(user)
 
-            # 3. Trigger Twilio SMS
-            resolve_send_otp(phone_number)
-            
-            # 4. Update user request time
-            user.last_password_reset_request = timezone.now()
-            user.save(update_fields=["last_password_reset_request"])
+        # 4. Save to our custom model
+        PasswordResetToken.objects.update_or_create(
+            phone_number=phone_number,
+            defaults={
+                "token": token, 
+                "is_used": False, 
+                "created_at": timezone.now()
+            }
+        )
+
+        # 5. ONLY NOW trigger Twilio (The cost-incurring step)
+        # We only reach this if the user is valid and not rate-limited
+        resolve_send_otp(phone_number)
+        
+        # 6. Update user metadata
+        user.last_password_reset_request = timezone.now()
+        user.save(update_fields=["last_password_reset_request"])
 
         return RequestPasswordResetOTP()
 
@@ -97,7 +108,25 @@ class VerifyPasswordResetOTP(BaseMutation):
 
     @classmethod
     def perform_mutation(cls, _root, info, phone_number, otp):
-        # 1. Verify code with Twilio
+        # 1. Check if a valid, unused reset request exists BEFORE calling Twilio
+        try:
+            reset_obj = PasswordResetToken.objects.filter(
+                phone_number=phone_number, 
+                is_used=False
+            ).latest('created_at')
+        except PasswordResetToken.DoesNotExist:
+            # If empty, the user either never started the process or already used the code
+            raise ValidationError(
+                {
+                    "phone_number": ValidationError(
+                        "Aucune demande de réinitialisation active trouvée. Veuillez recommencer le processus.", 
+                        code=AccountErrorCode.NOT_FOUND.value
+                    )
+                }
+            )
+
+        # 2. Verify code with Twilio
+        # We only get here if reset_obj exists
         result = resolve_verify_otp(phone_number, otp)
         
         if "error" in result or result.get("status") == "unapproved":
@@ -105,18 +134,9 @@ class VerifyPasswordResetOTP(BaseMutation):
                 {"otp": ValidationError("Code invalide ou expiré.", code=AccountErrorCode.INVALID.value)}
             )
 
-        # 2. Retrieve the Saleor Token from our model
-        try:
-            reset_obj = PasswordResetToken.objects.filter(
-                phone_number=phone_number, 
-                is_used=False
-            ).latest('created_at')
-            
-            # Note: You can add logic here to check if created_at is > 1 hour ago
-            
-            return VerifyPasswordResetOTP(token=reset_obj.token)
-        except PasswordResetToken.DoesNotExist:
-            raise ValidationError(
-                {"phone_number": ValidationError("Aucune demande de réinitialisation trouvée.", code=AccountErrorCode.NOT_FOUND.value)}
-            )
-
+        # 3. Mark the token as used and return it
+        # This prevents the user from using the same OTP verification twice
+        reset_obj.is_used = True
+        reset_obj.save(update_fields=["is_used"])
+        
+        return VerifyPasswordResetOTP(token=reset_obj.token)

@@ -50,6 +50,7 @@ from .warehouse.schema import (
 from .webhook.schema import WebhookMutations, WebhookQueries
 from .webhook.subscription_types import WEBHOOK_TYPES_MAP, Subscription
 from ..otp.graphql.schema import OTPMutations,OTPQueries
+from ..staff_notifications.graphql.schema import StaffNotificationMutations
 
 
 API_PATH = SimpleLazyObject(lambda: reverse("api"))
@@ -109,7 +110,8 @@ class Mutation(
     TaxMutations,
     WarehouseMutations,
     WebhookMutations,
-    OTPMutations
+    OTPMutations,
+    StaffNotificationMutations,
 ):
     pass
 

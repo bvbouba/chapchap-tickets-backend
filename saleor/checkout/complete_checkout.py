@@ -18,7 +18,7 @@ from ..account.error_codes import AccountErrorCode
 from ..account.models import Address, User
 from ..account.utils import retrieve_user_by_email, store_user_address
 from ..channel import MarkAsPaidStrategy
-from ..checkout import CheckoutAuthorizeStatus, calculations
+from ..checkout import CheckoutAuthorizeStatus, CheckoutChargeStatus, calculations
 from ..checkout.error_codes import CheckoutErrorCode
 from ..core.exceptions import GiftCardNotApplicable, InsufficientStock
 from ..core.postgres import FlatConcatSearchVector
@@ -105,6 +105,20 @@ if TYPE_CHECKING:
     from ..site.models import SiteSettings
 
 logger = logging.getLogger(__name__)
+
+
+def _should_auto_confirm_checkout_order(checkout_info: "CheckoutInfo") -> bool:
+    checkout = checkout_info.checkout
+    if not checkout_info.channel.automatically_confirm_all_new_orders:
+        return False
+    is_fully_charged = checkout.charge_status in [
+        CheckoutChargeStatus.FULL,
+        CheckoutChargeStatus.OVERCHARGED,
+    ]
+    return not (
+        checkout.authorize_status == CheckoutAuthorizeStatus.FULL
+        and not is_fully_charged
+    )
 
 
 def _process_voucher_data_for_order(checkout_info: "CheckoutInfo") -> dict:
@@ -792,7 +806,7 @@ def _create_order(
 
     status = (
         OrderStatus.UNFULFILLED
-        if checkout_info.channel.automatically_confirm_all_new_orders
+        if _should_auto_confirm_checkout_order(checkout_info)
         else OrderStatus.UNCONFIRMED
     )
     order = Order.objects.create(
@@ -1424,7 +1438,7 @@ def _create_order_from_checkout(
     status = (
         OrderStatus.UNFULFILLED
         if (
-            checkout_info.channel.automatically_confirm_all_new_orders
+            _should_auto_confirm_checkout_order(checkout_info)
             and checkout_info.checkout.payment_transactions.exists()
         )
         else OrderStatus.UNCONFIRMED
