@@ -1,0 +1,7 @@
+.env
+.env.production
+secrets/
+data/
+*.sql
+*.sql.gz
+backups/

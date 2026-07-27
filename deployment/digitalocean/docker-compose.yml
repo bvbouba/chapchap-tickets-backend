@@ -1,0 +1,163 @@
+# ChapChap Saleor — production stack for DigitalOcean
+# Bind API only on localhost; host Nginx terminates TLS for server.chapchapticket.com
+#
+# Usage (on the droplet):
+#   cd ~/chapchap/saleor/deployment/digitalocean
+#   docker compose up -d --build
+
+name: chapchap-saleor
+
+services:
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-saleor}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-saleor}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-saleor} -d ${POSTGRES_DB:-saleor}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    # Tuned for a small droplet (2–4 GB)
+    command:
+      - postgres
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - max_connections=50
+      - -c
+      - effective_cache_size=512MB
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: chapchap-saleor:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      CACHE_URL: ${CACHE_URL:-redis://redis:6379/0}
+    volumes:
+      - ./data/media:/app/media
+      - ./secrets/rsa_private.pem:/run/secrets/rsa_private.pem:ro
+      - ./secrets/rsa_public.pem:/run/secrets/rsa_public.pem:ro
+    entrypoint: ["/bin/sh", "/app/deployment/digitalocean/scripts/entrypoint.sh"]
+    # 1 worker keeps RAM usable on a small droplet; raise to 2 on 4GB+
+    command:
+      [
+        "uvicorn",
+        "saleor.asgi:application",
+        "--host=0.0.0.0",
+        "--port=8000",
+        "--workers=1",
+        "--lifespan=off",
+        "--ws=none",
+        "--no-server-header",
+        "--no-access-log",
+        "--timeout-keep-alive=35",
+        "--timeout-graceful-shutdown=30",
+        "--limit-max-requests=5000",
+      ]
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/')\" || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  worker:
+    image: chapchap-saleor:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      CACHE_URL: ${CACHE_URL:-redis://redis:6379/0}
+    volumes:
+      - ./data/media:/app/media
+      - ./secrets/rsa_private.pem:/run/secrets/rsa_private.pem:ro
+      - ./secrets/rsa_public.pem:/run/secrets/rsa_public.pem:ro
+    entrypoint: ["/bin/sh", "/app/deployment/digitalocean/scripts/entrypoint.sh"]
+    command:
+      [
+        "celery",
+        "--app=saleor.celeryconf:app",
+        "worker",
+        "--loglevel=INFO",
+        "--concurrency=1",
+        "-E",
+      ]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
+
+  beat:
+    image: chapchap-saleor:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      CACHE_URL: ${CACHE_URL:-redis://redis:6379/0}
+    volumes:
+      - ./secrets/rsa_private.pem:/run/secrets/rsa_private.pem:ro
+      - ./secrets/rsa_public.pem:/run/secrets/rsa_public.pem:ro
+    entrypoint: ["/bin/sh", "/app/deployment/digitalocean/scripts/entrypoint.sh"]
+    command:
+      [
+        "celery",
+        "--app=saleor.celeryconf:app",
+        "beat",
+        "--scheduler=saleor.schedulers.schedulers.DatabaseScheduler",
+        "--loglevel=INFO",
+      ]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
+
+volumes:
+  pgdata:
+  redisdata:
