@@ -1,4 +1,5 @@
 # ChapChap Saleor — production stack for DigitalOcean
+# Uses the EXISTING host Postgres DB `chapchap` (not a compose Postgres).
 # Bind API only on localhost; host Nginx terminates TLS for server.chapchapticket.com
 #
 # Usage (on the droplet):
@@ -7,31 +8,23 @@
 
 name: chapchap-saleor
 
-services:
-  db:
-    image: postgres:15-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-saleor}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
-      POSTGRES_DB: ${POSTGRES_DB:-saleor}
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-saleor} -d ${POSTGRES_DB:-saleor}"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-    # Tuned for a small droplet (2–4 GB)
-    command:
-      - postgres
-      - -c
-      - shared_buffers=128MB
-      - -c
-      - max_connections=50
-      - -c
-      - effective_cache_size=512MB
+x-saleor-app: &saleor-app
+  image: chapchap-saleor:latest
+  env_file:
+    - .env
+  environment:
+    DATABASE_URL: ${DATABASE_URL}
+    CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+    REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    CACHE_URL: ${CACHE_URL:-redis://redis:6379/0}
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  volumes:
+    - ./secrets/rsa_private.pem:/run/secrets/rsa_private.pem:ro
+    - ./secrets/rsa_public.pem:/run/secrets/rsa_public.pem:ro
+  entrypoint: ["/bin/sh", "/app/deployment/digitalocean/scripts/entrypoint.sh"]
 
+services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -45,23 +38,15 @@ services:
       retries: 10
 
   api:
+    <<: *saleor-app
     build:
       context: ../..
       dockerfile: Dockerfile
-    image: chapchap-saleor:latest
     restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      DATABASE_URL: ${DATABASE_URL}
-      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      CACHE_URL: ${CACHE_URL:-redis://redis:6379/0}
     volumes:
       - ./data/media:/app/media
       - ./secrets/rsa_private.pem:/run/secrets/rsa_private.pem:ro
       - ./secrets/rsa_public.pem:/run/secrets/rsa_public.pem:ro
-    entrypoint: ["/bin/sh", "/app/deployment/digitalocean/scripts/entrypoint.sh"]
     # 1 worker keeps RAM usable on a small droplet; raise to 2 on 4GB+
     command:
       [
@@ -81,8 +66,6 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
@@ -97,20 +80,12 @@ services:
       start_period: 60s
 
   worker:
-    image: chapchap-saleor:latest
+    <<: *saleor-app
     restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      DATABASE_URL: ${DATABASE_URL}
-      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      CACHE_URL: ${CACHE_URL:-redis://redis:6379/0}
     volumes:
       - ./data/media:/app/media
       - ./secrets/rsa_private.pem:/run/secrets/rsa_private.pem:ro
       - ./secrets/rsa_public.pem:/run/secrets/rsa_public.pem:ro
-    entrypoint: ["/bin/sh", "/app/deployment/digitalocean/scripts/entrypoint.sh"]
     command:
       [
         "celery",
@@ -121,27 +96,14 @@ services:
         "-E",
       ]
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
       api:
         condition: service_started
 
   beat:
-    image: chapchap-saleor:latest
+    <<: *saleor-app
     restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      DATABASE_URL: ${DATABASE_URL}
-      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      CACHE_URL: ${CACHE_URL:-redis://redis:6379/0}
-    volumes:
-      - ./secrets/rsa_private.pem:/run/secrets/rsa_private.pem:ro
-      - ./secrets/rsa_public.pem:/run/secrets/rsa_public.pem:ro
-    entrypoint: ["/bin/sh", "/app/deployment/digitalocean/scripts/entrypoint.sh"]
     command:
       [
         "celery",
@@ -151,13 +113,10 @@ services:
         "--loglevel=INFO",
       ]
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
       api:
         condition: service_started
 
 volumes:
-  pgdata:
   redisdata:

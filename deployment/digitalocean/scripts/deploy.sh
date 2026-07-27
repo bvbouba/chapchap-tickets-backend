@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Deploy / update Saleor on the droplet.
-# Run from the droplet (or via SSH) inside deployment/digitalocean.
+# Uses host Postgres (chapchap). Redis/API/worker/beat run in Docker.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -23,14 +23,18 @@ mkdir -p data/media data/static backups
 chmod 700 secrets
 chmod 600 secrets/*.pem .env || true
 
+# Stop obsolete compose Postgres if an older deploy created it
+docker compose stop db 2>/dev/null || true
+docker compose rm -f db 2>/dev/null || true
+
 echo "==> Building image"
 docker compose build api
 
-echo "==> Starting db + redis"
-docker compose up -d db redis
-sleep 3
+echo "==> Starting redis"
+docker compose up -d redis
+sleep 2
 
-echo "==> Running migrations"
+echo "==> Running migrations against host DB"
 docker compose run --rm --no-deps api python manage.py migrate --noinput
 
 echo "==> Starting api + worker + beat"
