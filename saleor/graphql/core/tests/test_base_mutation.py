@@ -312,5 +312,5 @@ def test_expired_token_error(user_api_client, channel_USD):
 
     # then
     error = content["errors"][0]
-    assert error["message"] == "Signature has expired"
+    assert error["message"] == "Session expirée. Veuillez vous reconnecter."
     assert error["extensions"]["exception"]["code"] == "ExpiredSignatureError"

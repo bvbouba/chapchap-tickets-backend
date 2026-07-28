@@ -83,7 +83,13 @@ def jwt_decode(
     token: str, verify_expiration=settings.JWT_EXPIRE, verify_aud: bool = False
 ) -> dict[str, Any]:
     jwt_manager = get_jwt_manager()
-    return jwt_manager.decode(token, verify_expiration, verify_aud=verify_aud)
+    try:
+        return jwt_manager.decode(token, verify_expiration, verify_aud=verify_aud)
+    except jwt.ExpiredSignatureError as e:
+        # User-facing GraphQL message (PyJWT default is English "Signature has expired").
+        raise jwt.ExpiredSignatureError(
+            "Session expirée. Veuillez vous reconnecter."
+        ) from e
 
 
 def create_token(payload: dict[str, Any], exp_delta: datetime.timedelta) -> str:

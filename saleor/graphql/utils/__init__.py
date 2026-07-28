@@ -284,6 +284,22 @@ def format_error(error, handled_exceptions, query=None):
     else:
         result = {"message": str(error)}
 
+    # Localize known English JWT / auth messages for the ChapChap apps.
+    fr_messages = {
+        "Signature has expired": "Session expirée. Veuillez vous reconnecter.",
+        "Error decoding signature": "Impossible de lire le jeton.",
+        "Invalid token": "Jeton invalide.",
+        "Invalid token. Create new one by using tokenCreate mutation.": (
+            "Session invalide. Veuillez vous reconnecter."
+        ),
+        "Invalid token. User does not exist or is inactive.": (
+            "Compte introuvable ou inactif."
+        ),
+    }
+    msg = result.get("message")
+    if isinstance(msg, str) and msg in fr_messages:
+        result["message"] = fr_messages[msg]
+
     if "extensions" not in result:
         result["extensions"] = {}
 

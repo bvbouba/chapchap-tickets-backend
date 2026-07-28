@@ -24,7 +24,7 @@ def get_user(payload):
         user = None
     if not user:
         raise ValidationError(
-            "Invalid token", code=AccountErrorCode.JWT_INVALID_TOKEN.value
+            "Jeton invalide", code=AccountErrorCode.JWT_INVALID_TOKEN.value
         )
     permissions = payload.get(PERMISSIONS_FIELD)
     if permissions is not None:
@@ -37,15 +37,17 @@ def get_payload(token):
         payload = jwt_decode(token)
     except jwt.ExpiredSignatureError as e:
         raise ValidationError(
-            "Signature has expired", code=AccountErrorCode.JWT_SIGNATURE_EXPIRED.value
+            "Session expirée. Veuillez vous reconnecter.",
+            code=AccountErrorCode.JWT_SIGNATURE_EXPIRED.value,
         ) from e
     except jwt.DecodeError as e:
         raise ValidationError(
-            "Error decoding signature", code=AccountErrorCode.JWT_DECODE_ERROR.value
+            "Impossible de lire le jeton",
+            code=AccountErrorCode.JWT_DECODE_ERROR.value,
         ) from e
     except jwt.InvalidTokenError as e:
         raise ValidationError(
-            "Invalid token", code=AccountErrorCode.JWT_INVALID_TOKEN.value
+            "Jeton invalide", code=AccountErrorCode.JWT_INVALID_TOKEN.value
         ) from e
     return payload
 
