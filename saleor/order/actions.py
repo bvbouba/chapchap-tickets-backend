@@ -609,6 +609,18 @@ def order_fulfilled(
                 app,
                 manager,
             )
+        # ChapChap: also SMS the customer that the reservation is confirmed.
+        try:
+            from ..staff_notifications.presence import send_customer_fulfillment_sms
+
+            send_customer_fulfillment_sms(order)
+        except Exception:
+            # Never block fulfillment on SMS failures.
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "Customer fulfillment SMS failed for order %s", order.pk
+            )
 
 
 def order_awaits_fulfillment_approval(

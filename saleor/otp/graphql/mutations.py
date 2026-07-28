@@ -30,10 +30,10 @@ def _identity_variants_from_email(email: str) -> tuple[set[str], set[str]]:
     email = (email or "").strip().lower()
     email_variants: set[str] = {email} if email else set()
     phone_variants: set[str] = set()
-    if not email.endswith("@chapchaptickets.com"):
+    if not email.endswith("@chapchapticket.com"):
         return email_variants, phone_variants
 
-    local = email[: -len("@chapchaptickets.com")]
+    local = email[: -len("@chapchapticket.com")]
     if not local:
         return email_variants, phone_variants
 
@@ -42,15 +42,15 @@ def _identity_variants_from_email(email: str) -> tuple[set[str], set[str]]:
         if not candidate:
             continue
         phone_variants.add(candidate)
-        email_variants.add(f"{candidate}@chapchaptickets.com")
+        email_variants.add(f"{candidate}@chapchapticket.com")
     return email_variants, phone_variants
 
 
 def _phone_from_staff_email(email: str) -> str:
     email = (email or "").strip()
-    if not email.endswith("@chapchaptickets.com"):
+    if not email.endswith("@chapchapticket.com"):
         return ""
-    local = email[: -len("@chapchaptickets.com")].strip()
+    local = email[: -len("@chapchapticket.com")].strip()
     if not local:
         return ""
     if local.startswith("+"):
@@ -112,7 +112,7 @@ class RequestPasswordResetOTP(BaseMutation):
     def perform_mutation(cls, _root, info, phone_number):
         # 1. Check if user exists first (Saves SMS cost)
         # Using your virtual email logic:
-        email = f"{phone_number}@chapchaptickets.com"
+        email = f"{phone_number}@chapchapticket.com"
         user = retrieve_user_by_email(email)
 
         # If user doesn't exist or isn't active, we exit early
@@ -308,7 +308,7 @@ class StaffIssueTemporaryPassword(BaseMutation):
                 {
                     "id": ValidationError(
                         "Staff email must be a ChapChap phone virtual email "
-                        "(e.g. +225…@chapchaptickets.com).",
+                        "(e.g. +225…@chapchapticket.com).",
                         code=AccountErrorCode.INVALID.value,
                     )
                 }

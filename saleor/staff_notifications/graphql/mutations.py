@@ -5,6 +5,7 @@ from ...graphql.core.mutations import BaseMutation
 from ...graphql.core.types.common import AccountError
 from ...permission.enums import OrderPermissions
 from ..models import StaffDeviceToken
+from ..presence import bump_user_presence
 
 
 class StaffPushTokenRegister(BaseMutation):
@@ -59,3 +60,22 @@ class StaffPushTokenUnregister(BaseMutation):
             user=info.context.user,
         ).update(is_active=False, last_seen_at=timezone.now())
         return StaffPushTokenUnregister(removed=updated > 0)
+
+
+class StaffPresenceHeartbeat(BaseMutation):
+    ok = graphene.Boolean(description="Whether presence was refreshed.")
+    updated = graphene.Int(description="Number of device tokens refreshed.")
+
+    class Meta:
+        description = (
+            "Marks the authenticated staff user as online by refreshing "
+            "last_seen_at on their active push tokens."
+        )
+        permissions = (OrderPermissions.MANAGE_ORDERS,)
+        error_type_class = AccountError
+        error_type_field = "account_errors"
+
+    @classmethod
+    def perform_mutation(cls, _root, info):
+        updated = bump_user_presence(info.context.user)
+        return StaffPresenceHeartbeat(ok=True, updated=updated)

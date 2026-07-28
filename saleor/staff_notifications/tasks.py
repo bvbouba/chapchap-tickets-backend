@@ -8,6 +8,7 @@ from ..celeryconf import app
 from ..core.db.connection import allow_writer
 from ..order.models import Order
 from .models import StaffDeviceToken
+from .presence import send_cashier_offline_sms
 
 logger = logging.getLogger(__name__)
 
@@ -68,35 +69,50 @@ def send_incoming_order_push(order_id: int):
             is_active=True,
             user__is_active=True,
             user__is_staff=True,
-        ).values_list("token", flat=True)
+        )
+        .exclude(token__startswith="presence:")
+        .values_list("token", flat=True)
     )
-    if not tokens:
-        return
 
-    messages = [_build_message(order, token) for token in tokens]
+    if tokens:
+        messages = [_build_message(order, token) for token in tokens]
+        try:
+            response = requests.post(EXPO_PUSH_URL, json=messages, timeout=10)
+            response.raise_for_status()
+        except requests.RequestException:
+            logger.exception("Failed to send incoming order push for order %s", order_id)
+            # Still attempt SMS fallback below.
+            response = None
+        else:
+            now = timezone.now()
+            # Do NOT bump last_seen_at here — that would fake "online" presence.
+            # Only deactivate dead tokens.
+            try:
+                results = response.json().get("data", [])
+            except ValueError:
+                results = []
+
+            invalid_tokens = [
+                token
+                for token, result in zip(tokens, results)
+                if result.get("status") == "error"
+                and result.get("details", {}).get("error") == "DeviceNotRegistered"
+            ]
+            if invalid_tokens:
+                StaffDeviceToken.objects.filter(token__in=invalid_tokens).update(
+                    is_active=False,
+                    last_seen_at=now,
+                )
+
     try:
-        response = requests.post(EXPO_PUSH_URL, json=messages, timeout=10)
-        response.raise_for_status()
-    except requests.RequestException:
-        logger.exception("Failed to send incoming order push for order %s", order_id)
-        return
-
-    now = timezone.now()
-    StaffDeviceToken.objects.filter(token__in=tokens).update(last_seen_at=now)
-
-    try:
-        results = response.json().get("data", [])
-    except ValueError:
-        return
-
-    invalid_tokens = [
-        token
-        for token, result in zip(tokens, results)
-        if result.get("status") == "error"
-        and result.get("details", {}).get("error") == "DeviceNotRegistered"
-    ]
-    if invalid_tokens:
-        StaffDeviceToken.objects.filter(token__in=invalid_tokens).update(
-            is_active=False,
-            last_seen_at=now,
+        sent = send_cashier_offline_sms(order)
+        if sent:
+            logger.info(
+                "Sent %s cashier offline SMS alert(s) for order %s",
+                sent,
+                order_id,
+            )
+    except Exception:
+        logger.exception(
+            "Cashier offline SMS fallback failed for order %s", order_id
         )
