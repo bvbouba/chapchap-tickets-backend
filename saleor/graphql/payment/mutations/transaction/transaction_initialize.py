@@ -105,10 +105,13 @@ class TransactionInitialize(TransactionSessionBase):
     ):
         if not action:
             return channel.default_transaction_flow_strategy
-        if (
-            action == TransactionFlowStrategy.AUTHORIZATION
-            and isinstance(source_object, checkout_models.Checkout)
-        ):
+        # Storefront (customer/guest) may request AUTHORIZATION or CHARGE on a
+        # checkout. MoMo has no real pre-auth hold — Charge is the correct path.
+        # Other strategies still require an app with HANDLE_PAYMENTS.
+        if isinstance(source_object, checkout_models.Checkout) and action in {
+            TransactionFlowStrategy.AUTHORIZATION,
+            TransactionFlowStrategy.CHARGE,
+        }:
             return action
         app = get_app_promise(info.context).get()
         if not app or not app.has_perm(PaymentPermissions.HANDLE_PAYMENTS):

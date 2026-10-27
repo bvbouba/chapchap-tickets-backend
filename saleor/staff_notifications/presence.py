@@ -287,3 +287,52 @@ def send_customer_fulfillment_sms(order: Order) -> bool:
     order.store_value_in_metadata({CUSTOMER_FULFILLMENT_SMS_META_KEY: "true"})
     order.save(update_fields=["metadata", "updated_at"])
     return True
+
+
+CUSTOMER_GUICHET_EXPIRED_SMS_META_KEY = "customer_guichet_expired_sms_sent"
+
+
+def send_customer_guichet_expired_sms(order: Order) -> bool:
+    """Notify customer that guichet missed the SLA and payment was refunded."""
+    if is_cash_or_counter_order(order):
+        return False
+
+    if (
+        order.get_value_from_metadata(CUSTOMER_GUICHET_EXPIRED_SMS_META_KEY) or ""
+    ).strip() == "true":
+        return False
+
+    phone = customer_phone_from_order(order)
+    if not phone:
+        logger.info(
+            "Skip guichet-expired SMS — no phone on order %s", order.pk
+        )
+        return False
+
+    amount = order.total_gross_amount
+    currency = (order.currency or "XOF").upper()
+    money = (
+        f"{int(amount):,} {('FCFA' if currency == 'XOF' else currency)}".replace(",", " ")
+        if amount is not None
+        else ""
+    )
+    body = (
+        f"ChapChap: désolé, la gare n'a pas validé votre réservation #{order.number} à temps. "
+        + (
+            f"Votre paiement de {money} a été automatiquement remboursé sur Mobile Money."
+            if money
+            else "Votre paiement a été automatiquement remboursé sur Mobile Money."
+        )
+    )
+    result = send_sms_message(phone, body)
+    if "error" in result:
+        logger.warning(
+            "Guichet-expired SMS failed for order=%s: %s",
+            order.pk,
+            result.get("error"),
+        )
+        return False
+
+    order.store_value_in_metadata({CUSTOMER_GUICHET_EXPIRED_SMS_META_KEY: "true"})
+    order.save(update_fields=["metadata", "updated_at"])
+    return True

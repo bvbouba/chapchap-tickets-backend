@@ -38,7 +38,7 @@ echo "==> Running migrations against host DB"
 docker compose run --rm --no-deps api python manage.py migrate --noinput
 
 echo "==> Starting api + worker + beat"
-docker compose up -d api worker beat
+docker compose up -d --force-recreate api worker beat
 
 echo "==> Syncing static files for Nginx"
 mkdir -p "${DEPLOY_DIR}/data/static"

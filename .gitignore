@@ -23,6 +23,7 @@ dist/
 /digital_contents/
 # Environments
 .env
+printme.env
 .venv
 env/
 venv/
@@ -31,6 +32,7 @@ env.bak/
 venv.bak/
 Pipfile
 !.env.example
+!printme.env.example
 
 # Exported results file
 django-queries-results.html

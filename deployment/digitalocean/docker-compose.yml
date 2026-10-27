@@ -118,5 +118,15 @@ services:
       api:
         condition: service_started
 
+  # Not started by a normal `docker compose up`. Requires --profile printme.
+  printme:
+    <<: *saleor-app
+    profiles: ["printme"]
+    restart: unless-stopped
+    env_file:
+      - .env
+      - printme.env
+    command: ["python", "manage.py", "process_inbound_mail"]
+
 volumes:
   redisdata:

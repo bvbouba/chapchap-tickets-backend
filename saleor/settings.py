@@ -36,6 +36,7 @@ from .core.schedules import initiated_promotion_webhook_schedule
 from .graphql.executor import patch_executor
 from .graphql.promise import patch_promise
 from .patch_local import patch_local
+from .printme.env import printme_int
 
 load_dotenv()
 django_stubs_ext.monkeypatch()
@@ -336,6 +337,7 @@ INSTALLED_APPS = [
     #added apps
     "saleor.otp",
     "saleor.staff_notifications",
+    "saleor.printme",
     # External apps
     "django_measurement",
     "mptt",
@@ -541,6 +543,27 @@ AWS_STORAGE_BUCKET_NAME = os.environ.get("AWS_STORAGE_BUCKET_NAME")
 AWS_DEFAULT_ACL = os.environ.get("AWS_DEFAULT_ACL", None)
 AWS_S3_FILE_OVERWRITE = get_bool_from_env("AWS_S3_FILE_OVERWRITE", True)
 
+# PrintMe inbound mail. Empty values mean "unset". The worker reads
+# PRINTME_AWS_* only and does not reuse the Saleor media credentials above.
+PRINTME_INBOUND_ADDRESS = os.environ.get("PRINTME_INBOUND_ADDRESS", "")
+PRINTME_S3_BUCKET = os.environ.get("PRINTME_S3_BUCKET", "")
+PRINTME_S3_PREFIX = os.environ.get("PRINTME_S3_PREFIX", "raw/")
+PRINTME_SQS_QUEUE_URL = os.environ.get("PRINTME_SQS_QUEUE_URL", "")
+PRINTME_SES_FROM_ADDRESS = os.environ.get("PRINTME_SES_FROM_ADDRESS", "")
+# The inbound worker accepts only ses. django remains the default so an
+# unset variable does not make this Saleor process send through SES.
+PRINTME_EMAIL_BACKEND = os.environ.get("PRINTME_EMAIL_BACKEND", "django")
+PRINTME_AWS_REGION = os.environ.get("PRINTME_AWS_REGION", "")
+PRINTME_AWS_ACCESS_KEY_ID = os.environ.get("PRINTME_AWS_ACCESS_KEY_ID", "")
+PRINTME_AWS_SECRET_ACCESS_KEY = os.environ.get("PRINTME_AWS_SECRET_ACCESS_KEY", "")
+# Empty or missing values use the defaults. Invalid values stop startup.
+PRINTME_MAX_BYTES = printme_int("PRINTME_MAX_BYTES", 20 * 1024 * 1024, minimum=0)
+PRINTME_CODE_TTL_HOURS = printme_int("PRINTME_CODE_TTL_HOURS", 24, minimum=1)
+PRINTME_MAX_VERIFY_ATTEMPTS = printme_int(
+    "PRINTME_MAX_VERIFY_ATTEMPTS", 5, minimum=1
+)
+PRINTME_CODE_KEY = os.environ.get("PRINTME_CODE_KEY", "")
+
 # Google Cloud Storage configuration
 # See https://django-storages.readthedocs.io/en/latest/backends/gcloud.html
 GS_PROJECT_ID = os.environ.get("GS_PROJECT_ID")
@@ -650,6 +673,19 @@ BEAT_EXPIRE_ORDERS_AFTER_TIMEDELTA = datetime.timedelta(
     seconds=parse(os.environ.get("BEAT_EXPIRE_ORDERS_AFTER_TIMEDELTA", "5 minutes"))
 )
 
+# Guichet confirmation SLA (paid online → staff must confirm/fulfill)
+# Auto-expire/refund is OFF by default. Set GUICHET_AUTO_EXPIRE_ENABLED=true and
+# restore the beat entry below when re-enabling.
+GUICHET_AUTO_EXPIRE_ENABLED = (
+    os.environ.get("GUICHET_AUTO_EXPIRE_ENABLED", "false").lower() in ("1", "true", "yes")
+)
+GUICHET_CONFIRM_TIMEOUT_MINUTES = int(
+    os.environ.get("GUICHET_CONFIRM_TIMEOUT_MINUTES", "15")
+)
+BEAT_GUICHET_TIMEOUT_SCHEDULE = datetime.timedelta(
+    seconds=parse(os.environ.get("BEAT_GUICHET_TIMEOUT_SCHEDULE", "1 minute"))
+)
+
 # Defines after how many seconds should the task triggered by the Celery beat
 # entry 'update-products-search-vectors' expire if it wasn't picked up by a worker.
 BEAT_UPDATE_SEARCH_SEC = parse(
@@ -723,6 +759,7 @@ CELERY_BEAT_SCHEDULE = {
         "task": "saleor.order.tasks.expire_orders_task",
         "schedule": BEAT_EXPIRE_ORDERS_AFTER_TIMEDELTA,
     },
+    # Guichet auto-expire: added below only when GUICHET_AUTO_EXPIRE_ENABLED=true
     "remove-apps-marked-as-removed": {
         "task": "saleor.app.tasks.remove_apps_task",
         "schedule": crontab(hour=3, minute=0),
@@ -745,6 +782,13 @@ CELERY_BEAT_SCHEDULE = {
         "options": {"expires": BEAT_PRICE_RECALCULATION_SCHEDULE_EXPIRE_AFTER_SEC},
     },
 }
+
+# Opt-in: auto-refund MoMo bookings the guichet never confirms.
+if GUICHET_AUTO_EXPIRE_ENABLED:
+    CELERY_BEAT_SCHEDULE["expire-unconfirmed-guichet-orders"] = {
+        "task": "saleor.order.guichet_timeout.expire_unconfirmed_guichet_orders_task",
+        "schedule": BEAT_GUICHET_TIMEOUT_SCHEDULE,
+    }
 
 # The maximum wait time between each is_due() call on schedulers
 # It needs to be higher than the frequency of the schedulers to avoid unnecessary

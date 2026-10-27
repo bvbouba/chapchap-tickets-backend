@@ -32,22 +32,31 @@ def _trip_route(order: Order) -> str:
     return line.product_name if line else "Nouveau trajet"
 
 
+def _passenger_count(order: Order) -> int:
+    total = sum(line.quantity or 0 for line in order.lines.all())
+    return total if total > 0 else 1
+
+
 def _build_message(order: Order, token: str) -> dict:
     passenger_name = _first_passenger_name(order)
     trip_route = _trip_route(order)
     order_global_id = graphene.Node.to_global_id("Order", order.id)
+    seats = _passenger_count(order)
+    seat_label = "1 passager" if seats == 1 else f"{seats} passagers"
     return {
         "to": token,
-        "title": "Nouvelle commande",
-        "body": f"{passenger_name} - {trip_route}",
+        "title": f"Nouvelle commande #{order.number}",
+        "body": f"{passenger_name} ({seat_label}) — {trip_route}",
         "priority": "high",
         "sound": "default",
+        "channelId": "default",
         "data": {
             "type": "ORDER_CREATED",
             "orderId": order_global_id,
             "orderNumber": order.number,
             "passengerName": passenger_name,
             "tripRoute": trip_route,
+            "passengerCount": seats,
         },
     }
 
@@ -56,13 +65,20 @@ def _build_message(order: Order, token: str) -> dict:
 @allow_writer()
 def send_incoming_order_push(order_id: int):
     order = (
-        Order.objects.select_related("billing_address")
+        Order.objects.select_related("billing_address", "channel")
         .prefetch_related("lines")
         .filter(id=order_id)
         .first()
     )
     if not order:
         return
+
+    try:
+        from .advance_ledger import debit_online_order
+
+        debit_online_order(order)
+    except Exception:
+        logger.exception("advance ledger debit failed for order %s", order.id)
 
     tokens = list(
         StaffDeviceToken.objects.filter(

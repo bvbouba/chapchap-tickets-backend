@@ -35,10 +35,18 @@ class AccountRequestDeletion(BaseMutation):
                 "only one channel exists."
             )
         )
+        no_notification = graphene.Boolean(
+            description=(
+                "If true, do not send notification; return the deletion token instead "
+                "(needed for phone-based accounts without a real mailbox)."
+            ),
+            default_value=False,
+        )
 
     class Meta:
         description = (
-            "Sends an email with the account removal link for the logged-in user."
+            "Request account deletion. Either sends a notification email or returns "
+            "a one-time token when noNotification=true."
         )
         doc_category = DOC_CATEGORY_USERS
         permissions = (AuthorizationFilters.AUTHENTICATED_USER,)
@@ -55,9 +63,20 @@ class AccountRequestDeletion(BaseMutation):
             ),
         ]
 
+    token = graphene.String(
+        description="Account deletion token (if noNotification=true)."
+    )
+
     @classmethod
     def perform_mutation(  # type: ignore[override]
-        cls, _root, info: ResolveInfo, /, *, channel=None, redirect_url
+        cls,
+        _root,
+        info: ResolveInfo,
+        /,
+        *,
+        channel=None,
+        redirect_url,
+        no_notification=False,
     ):
         user = cast(User, info.context.user)
         try:
@@ -72,10 +91,10 @@ class AccountRequestDeletion(BaseMutation):
         manager = get_plugin_manager_promise(info.context).get()
         token = account_delete_token_generator.make_token(user)
 
-        # Notifications will be deprecated in the future
-        notifications.send_account_delete_confirmation_notification(
-            redirect_url, user, manager, channel_slug=channel_slug, token=token
-        )
+        if not no_notification:
+            notifications.send_account_delete_confirmation_notification(
+                redirect_url, user, manager, channel_slug=channel_slug, token=token
+            )
         params = urlencode({"token": token})
         delete_url = prepare_url(params, redirect_url)
 
@@ -87,4 +106,4 @@ class AccountRequestDeletion(BaseMutation):
             delete_url,
         )
 
-        return AccountRequestDeletion()
+        return AccountRequestDeletion(token=token if no_notification else None)

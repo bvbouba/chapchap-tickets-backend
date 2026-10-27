@@ -24,6 +24,9 @@ from .actions import call_order_event, call_order_events
 from .models import Order, OrderEvent
 from .utils import invalidate_order_prices
 
+# Register guichet SLA task with Celery (autodiscover only loads tasks.py).
+from .guichet_timeout import expire_unconfirmed_guichet_orders_task  # noqa: F401
+
 logger = logging.getLogger(__name__)
 
 # Batch size of 100 is about ~1MB of memory usage in task

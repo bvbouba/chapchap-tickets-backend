@@ -19498,6 +19498,12 @@ type Mutation {
     channel: String
 
     """
+    If true, do not send notification; return the deletion token instead
+    (needed for phone-based accounts without a real mailbox).
+    """
+    noNotification: Boolean = false
+
+    """
     URL of a view where users should be redirected to delete their account. URL in RFC 1808 format.
     """
     redirectUrl: String!
@@ -30464,6 +30470,8 @@ Triggers the following webhook events:
 - ACCOUNT_DELETE_REQUESTED (async): An account delete requested.
 """
 type AccountRequestDeletion @doc(category: "Users") @webhookEventsInfo(asyncEvents: [NOTIFY_USER, ACCOUNT_DELETE_REQUESTED], syncEvents: []) {
+  """Account deletion token (if noNotification=true)."""
+  token: String
   accountErrors: [AccountError!]! @deprecated(reason: "Use `errors` field instead.")
   errors: [AccountError!]!
 }

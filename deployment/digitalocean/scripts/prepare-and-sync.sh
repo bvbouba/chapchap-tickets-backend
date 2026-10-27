@@ -77,6 +77,7 @@ rsync -az --delete \
   --exclude 'node_modules' \
   --exclude '__pycache__' \
   --exclude '.pytest_cache' \
+  --exclude 'deployment/digitalocean/.env' \
   --exclude 'deployment/digitalocean/data/media' \
   --exclude 'deployment/digitalocean/data/static' \
   --exclude 'deployment/digitalocean/backups' \
