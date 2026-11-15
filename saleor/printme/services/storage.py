@@ -121,6 +121,8 @@ class S3ObjectStorage:
         object_key = self._full_key(key)
         try:
             response = self._s3().get_object(Bucket=self.bucket, Key=object_key)
+        except StorageError:
+            raise
         except Exception as exc:
             if _error_code(exc) in _MISSING_CODES:
                 return None

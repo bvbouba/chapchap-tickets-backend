@@ -8,6 +8,7 @@ from saleor.printme.services.parse_email import (
 
 PDF = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
 SENDER = "sender@example.com"
+RECIPIENT = "print@in.bavasim.com"
 
 
 def _message(parts, *, body="Please print the attached file."):
@@ -81,9 +82,10 @@ def test_non_pdf_attachment_is_rejected_even_when_labeled_as_pdf():
     result = parse_email(raw)
 
     # then
-    assert result.ok is False
-    assert result.failure_reason == EmailRejection.NON_PDF
+    assert result.ok is True
     assert result.attachments == ()
+    assert result.rejections[0].filename == "report.pdf"
+    assert result.rejections[0].reason == "unsupported"
     assert b"This is not a PDF." not in result.failure_reason.encode()
 
 
@@ -100,9 +102,10 @@ def test_mixed_pdf_and_non_pdf_attachments_reject_the_whole_email():
     result = parse_email(raw)
 
     # then
-    assert result.ok is False
-    assert result.failure_reason == EmailRejection.NON_PDF
-    assert result.attachments == ()
+    assert result.ok is True
+    assert [item.filename for item in result.attachments] == ["job.pdf"]
+    assert result.rejections[0].filename == "photo.png"
+    assert result.rejections[0].reason == "unsupported"
     assert PDF not in result.failure_reason.encode()
 
 
@@ -151,8 +154,10 @@ def test_oversized_message_or_attachment_is_rejected_before_use():
     assert stream_result.failure_reason == EmailRejection.OVERSIZED
     assert stream.tell() == 21
     assert message_result.failure_reason == EmailRejection.OVERSIZED
-    assert declared_result.failure_reason == EmailRejection.OVERSIZED
-    for result in (raw_result, stream_result, message_result, declared_result):
+    assert declared_result.ok is True
+    assert declared_result.attachments == ()
+    assert declared_result.rejections[0].reason == "oversized"
+    for result in (raw_result, stream_result, message_result):
         assert result.ok is False
         assert result.attachments == ()
 
@@ -173,8 +178,9 @@ def test_pdf_magic_must_fall_inside_the_first_window():
     early_result = parse_email(early_message)
 
     # then
-    assert late_result.failure_reason == EmailRejection.NON_PDF
+    assert late_result.ok is True
     assert late_result.attachments == ()
+    assert late_result.rejections[0].reason == "unsupported"
     assert early_result.ok is True
     assert early_result.attachments[0].content == early
 
@@ -234,6 +240,104 @@ def test_sender_header_injection_is_not_accepted():
     assert "\n" not in newline_sender.sender
     assert "\r" not in newline_sender.sender
     assert newline_sender.attachments == ()
+
+
+def test_docx_package_is_accepted_and_a_plain_zip_is_not():
+    # given
+    import io
+    import zipfile
+
+    word = io.BytesIO()
+    with zipfile.ZipFile(word, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
+        archive.writestr("word/document.xml", "<document/>")
+    plain = io.BytesIO()
+    with zipfile.ZipFile(plain, "w") as archive:
+        archive.writestr("readme.txt", "hello")
+    message = EmailMessage()
+    message["From"] = f"Print Customer <{SENDER}>"
+    message["To"] = RECIPIENT
+    message.set_content("Word and zip.")
+    message.add_attachment(
+        word.getvalue(),
+        maintype="application",
+        subtype="vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename="letter.docx",
+    )
+    message.add_attachment(
+        plain.getvalue(), maintype="application", subtype="zip", filename="notes.zip"
+    )
+    message.add_attachment(
+        b"PK\x03\x04not-a-zip",
+        maintype="application",
+        subtype="octet-stream",
+        filename="broken.docx",
+    )
+
+    # when
+    result = parse_email(message.as_bytes())
+
+    # then
+    assert result.ok is True
+    assert result.attachments[0].filename == "letter.docx"
+    assert result.attachments[0].source_format == "docx"
+    reasons = {item.filename: item.reason for item in result.rejections}
+    assert reasons["notes.zip"] == "unsupported"
+    assert reasons["broken.docx"] == "corrupt"
+
+
+def test_eleventh_pdf_is_rejected_as_excess():
+    # given
+    message = EmailMessage()
+    message["From"] = f"Print Customer <{SENDER}>"
+    message["To"] = RECIPIENT
+    message.set_content("Too many files.")
+    for index in range(11):
+        message.add_attachment(
+            PDF,
+            maintype="application",
+            subtype="pdf",
+            filename=f"file-{index}.pdf",
+        )
+
+    # when
+    result = parse_email(message.as_bytes())
+
+    # then
+    assert result.ok is True
+    assert len(result.attachments) == 10
+    assert result.rejections[0].filename == "file-10.pdf"
+    assert result.rejections[0].reason == "excess"
+
+
+def test_attachment_over_the_per_file_limit_is_rejected_alone(monkeypatch):
+    # given
+    monkeypatch.setattr(
+        "saleor.printme.services.parse_email._PER_FILE_BYTES",
+        100,
+    )
+    message = EmailMessage()
+    message["From"] = f"Print Customer <{SENDER}>"
+    message["To"] = RECIPIENT
+    message.set_content("One file is too large.")
+    message.add_attachment(
+        b"%PDF-ok", maintype="application", subtype="pdf", filename="small.pdf"
+    )
+    message.add_attachment(
+        b"%PDF-" + (b"x" * 200),
+        maintype="application",
+        subtype="pdf",
+        filename="large.pdf",
+    )
+
+    # when
+    result = parse_email(message.as_bytes(), max_bytes=1024)
+
+    # then
+    assert result.ok is True
+    assert [item.filename for item in result.attachments] == ["small.pdf"]
+    assert result.rejections[0].filename == "large.pdf"
+    assert result.rejections[0].reason == "oversized"
 
 
 def test_string_input_is_rejected_as_malformed():

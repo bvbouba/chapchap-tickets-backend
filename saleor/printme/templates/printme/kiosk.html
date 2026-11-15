@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="csrf-token" content="{{ csrf_token }}" />
+    <title>PrintMe kiosk</title>
+    <link rel="stylesheet" href="/static/printme/kiosk.css" />
+  </head>
+  <body>
+    <main
+      class="kiosk"
+      data-idle-ms="120000"
+      data-idle-warning-ms="15000"
+      data-session-url="{% url 'printme-kiosk-session' %}"
+      data-clear-url="{% url 'printme-kiosk-clear' %}"
+      data-preview-base="{% url 'printme-kiosk' %}documents/"
+      data-quote-url="{% url 'printme-kiosk-quote' %}"
+      data-print-url="{% url 'printme-kiosk-print' %}"
+    >
+      <section class="screen screen-shell" data-screen="welcome" aria-labelledby="welcome-title">
+        <header class="screen-header">
+          <p class="eyebrow">PrintMe</p>
+          <h1 id="welcome-title">Print your documents</h1>
+          <p>Start when you are at the kiosk. Have the release code from your email ready.</p>
+        </header>
+        <div class="screen-body welcome-body">
+          <button type="button" class="start-print" data-go-code>Start printing</button>
+        </div>
+        <footer class="screen-footer"></footer>
+      </section>
+
+      <section class="screen screen-shell" data-screen="code" hidden aria-labelledby="code-title">
+        <header class="screen-header">
+          <h1 id="code-title">Enter release code</h1>
+        </header>
+        <div class="screen-body entry">
+          <div class="code-line">
+            <input class="code-field" data-code-field readonly inputmode="none" maxlength="8" autocomplete="off" aria-label="Release code" />
+            <button type="button" class="secondary delete-key" data-delete aria-label="Delete last character">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h11a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8l-6-6 6-6z"></path><path d="M11 10l5 5M16 10l-5 5"></path></svg>
+            </button>
+          </div>
+          <p class="error-text" data-code-error role="alert"></p>
+          <div class="keypad" aria-label="Release code keypad">
+            <button type="button" data-digit="7">7</button>
+            <button type="button" data-digit="8">8</button>
+            <button type="button" data-digit="9">9</button>
+            <button type="button" data-digit="A">A</button>
+            <button type="button" data-digit="4">4</button>
+            <button type="button" data-digit="5">5</button>
+            <button type="button" data-digit="6">6</button>
+            <button type="button" data-digit="B">B</button>
+            <button type="button" data-digit="1">1</button>
+            <button type="button" data-digit="2">2</button>
+            <button type="button" data-digit="3">3</button>
+            <button type="button" data-digit="C">C</button>
+            <button type="button" data-digit="0">0</button>
+            <button type="button" data-digit="E">E</button>
+            <button type="button" data-digit="F">F</button>
+            <button type="button" data-digit="D">D</button>
+          </div>
+        </div>
+        <footer class="screen-footer">
+          <button type="button" class="secondary entry-cancel" data-back>Back</button>
+          <button type="button" class="entry-continue" data-continue disabled>Next</button>
+        </footer>
+      </section>
+
+      <section class="screen screen-shell documents-screen" data-screen="documents" hidden aria-labelledby="documents-title">
+        <header class="screen-header">
+          <h1 id="documents-title">Select document to print</h1>
+        </header>
+        <div class="screen-body documents-body">
+          <p class="notice" data-documents-note hidden></p>
+          <table class="document-table">
+            <thead>
+              <tr>
+                <th scope="col">Type</th>
+                <th scope="col">Sort from A to Z</th>
+              </tr>
+            </thead>
+            <tbody data-document-list></tbody>
+          </table>
+        </div>
+        <footer class="screen-footer">
+          <button type="button" class="secondary" data-start-over data-go-home>Start over</button>
+          <button type="button" data-open-preview hidden>Next</button>
+        </footer>
+      </section>
+
+      <section class="screen screen-shell preview-screen" data-screen="preview" hidden aria-labelledby="preview-title">
+        <h1 id="preview-title" class="sr-only">Document preview</h1>
+        <div class="screen-body preview-body">
+          <aside class="option-nav" aria-labelledby="options-heading">
+            <h2 id="options-heading">Select print option</h2>
+            <div class="copies-row" data-option="copies">
+              <span>Total copies</span>
+              <div class="stepper" role="group" aria-label="Total copies">
+                <button type="button" data-copies-delta="-1" aria-label="Fewer copies">−</button>
+                <span data-copy-count>1</span>
+                <button type="button" data-copies-delta="1" aria-label="More copies">+</button>
+              </div>
+            </div>
+            <div class="option-block">
+              <button type="button" class="option-row" data-option="pages" aria-pressed="false"><span data-value-label>All pages</span></button>
+              <div class="option-panel" data-option-panel="pages" hidden>
+                <p class="option-label">Value</p>
+                <div class="choices" role="group" aria-label="Page range">
+                  <button type="button" data-pages="all" aria-pressed="true">All pages</button>
+                  <button type="button" data-pages="custom" aria-pressed="false">Custom range</button>
+                </div>
+                <label class="range-entry" data-range-entry hidden>
+                  <span>Page range</span>
+                  <input data-page-range maxlength="128" inputmode="text" autocomplete="off" placeholder="1-3,6,8-10" aria-label="Custom page range" />
+                </label>
+                <p class="error-text" data-page-error role="alert" hidden></p>
+                <button type="button" data-option-ok>OK</button>
+              </div>
+            </div>
+            <div class="option-block">
+              <button type="button" class="option-row" data-option="color" aria-pressed="false"><span data-color-label>Black &amp; White</span></button>
+              <div class="option-panel" data-option-panel="color" hidden>
+                <p class="option-label">Color</p>
+                <div class="choices" role="group" aria-label="Color">
+                  <button type="button" data-color="black-and-white" aria-pressed="true">Black &amp; White</button>
+                  <button type="button" data-color="color" aria-pressed="false">Color</button>
+                </div>
+                <button type="button" data-option-ok>OK</button>
+              </div>
+            </div>
+            <div class="option-block">
+              <button type="button" class="option-row" data-option="sides" aria-pressed="false"><span data-sides-label>One-sided</span></button>
+              <div class="option-panel" data-option-panel="sides" hidden>
+                <p class="option-label">Sides</p>
+                <div class="choices" role="group" aria-label="Sides">
+                  <button type="button" data-sides="one-sided" aria-pressed="true">One-sided</button>
+                  <button type="button" data-sides="two-sided" aria-pressed="false">Two-sided</button>
+                </div>
+                <button type="button" data-option-ok>OK</button>
+              </div>
+            </div>
+          </aside>
+          <div class="preview-main">
+            <p class="error-text" data-preview-note hidden></p>
+            <div class="preview-frame">
+              <div class="preview-stage" data-preview-stage>
+                <canvas data-preview-canvas hidden></canvas>
+              </div>
+              <div class="preview-toolbar">
+                <button type="button" class="secondary icon-button" data-zoom="out" aria-label="Zoom out">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"></circle><path d="M7 10h6M15 15l5 5"></path></svg>
+                </button>
+                <button type="button" class="secondary icon-button" data-zoom="in" aria-label="Zoom in">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"></circle><path d="M10 7v6M7 10h6M15 15l5 5"></path></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <footer class="screen-footer">
+          <button type="button" class="secondary" data-back>Back</button>
+          <div class="page-nav">
+            <button type="button" class="secondary" data-page="-1" aria-label="Previous page">‹</button>
+            <span data-page-label></span>
+            <button type="button" class="secondary" data-page="1" aria-label="Next page">›</button>
+          </div>
+          <button type="button" data-go-summary>Next</button>
+        </footer>
+      </section>
+
+      <section class="screen screen-shell summary-screen" data-screen="summary" hidden aria-labelledby="summary-title">
+        <header class="screen-header">
+          <h1 id="summary-title">Print job information</h1>
+        </header>
+        <div class="screen-body">
+          <table class="job-table">
+            <thead>
+              <tr>
+                <th>Print item</th>
+                <th>Price</th>
+                <th>Count</th>
+                <th>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td data-summary-item>Document</td>
+                <td data-summary-price>Pricing is not yet available.</td>
+                <td data-summary-copies>1</td>
+                <td data-summary-line>Pricing is not yet available.</td>
+              </tr>
+            </tbody>
+          </table>
+          <dl class="confirm-list">
+            <div><dt>Copies</dt><dd data-summary-copy-count>1</dd></div>
+            <div><dt>Pages</dt><dd data-summary-pages>All pages</dd></div>
+            <div><dt>Color</dt><dd data-summary-color>Black &amp; White</dd></div>
+            <div><dt>Sides</dt><dd data-summary-sides>One-sided</dd></div>
+            <div><dt>Paper</dt><dd data-summary-paper>A4</dd></div>
+          </dl>
+          <p class="error-text" data-summary-note role="alert" hidden></p>
+          <p class="total-label">Current print job total</p>
+          <div class="total-panel" data-job-total>Pricing is not yet available.</div>
+        </div>
+        <footer class="screen-footer">
+          <button type="button" class="secondary" data-back>Back</button>
+          <button type="button" data-go-printing disabled>Print</button>
+        </footer>
+      </section>
+
+      <section class="screen screen-shell" data-screen="printing" hidden aria-labelledby="printing-title">
+        <header class="screen-header">
+          <p class="eyebrow">Test print</p>
+          <h1 id="printing-title" data-print-title>Preparing your print job…</h1>
+        </header>
+        <div class="screen-body">
+          <p class="notice" data-print-banner>This is a test print. Pricing is not yet available.</p>
+          <p data-print-detail aria-live="polite">No document has been sent to a printer.</p>
+        </div>
+        <footer class="screen-footer">
+          <button type="button" class="secondary" data-back>Back</button>
+          <button type="button" data-start-over>Start over</button>
+        </footer>
+      </section>
+
+      <section class="screen screen-shell" data-screen="error" hidden aria-labelledby="error-title">
+        <header class="screen-header">
+          <p class="eyebrow">PrintMe</p>
+          <h1 id="error-title">Try again</h1>
+        </header>
+        <div class="screen-body">
+          <p data-error-message>The kiosk could not reach the print service. Try again.</p>
+        </div>
+        <footer class="screen-footer">
+          <button type="button" class="secondary" data-start-over>Start over</button>
+          <button type="button" data-retry>Try again</button>
+        </footer>
+      </section>
+
+      <div class="overlay" data-overlay="busy" hidden>
+        <div class="spinner" aria-hidden="true"></div>
+        <p data-busy-message>Checking your release code…</p>
+        <p data-busy-detail></p>
+      </div>
+      <div class="overlay" data-overlay="idle" hidden>
+        <h2>Are you still there?</h2>
+        <p>Your session will clear shortly.</p>
+        <button type="button" data-stay>I'm still here</button>
+      </div>
+    </main>
+    <script src="/static/printme/kiosk-mock.js"></script>
+    <script type="module" src="/static/printme/kiosk.js"></script>
+  </body>
+</html>

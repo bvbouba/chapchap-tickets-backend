@@ -17,9 +17,16 @@ from django.core.validators import validate_email
 from django.db import DatabaseError, IntegrityError, transaction
 
 from .. import PrintJobStatus
-from ..models import PrintJob
+from ..models import PrintDocument, PrintDocumentStatus, PrintJob
 from .codes import CodeKeyError, ensure_access_code_key, issue_access_code
-from .parse_email import parse_email
+from .convert import ConversionError, LibreOfficeConverter
+from .parse_email import (
+    EmailRejection,
+    FileRejection,
+    RejectedFile,
+    display_filename,
+    parse_email,
+)
 from .storage import (
     DOCUMENT_PREFIX,
     ObjectStorage,
@@ -45,6 +52,8 @@ class IngestFailure:
     STORAGE = "storage"
     DATABASE = "database"
     CODE_KEY = "code_key"
+    UNSUPPORTED = "unsupported"
+    NO_SUPPORTED_DOCUMENT = "no_supported_document"
 
 
 @dataclass(frozen=True)
@@ -64,6 +73,7 @@ def ingest_inbound_email(
     bucket: str,
     object_key: str,
     storage: ObjectStorage | None = None,
+    converter=None,
 ) -> IngestResult:
     """Ingest one SES message and its private PDF.
 
@@ -93,13 +103,6 @@ def ingest_inbound_email(
             recipient=recipient,
             reason=parsed.failure_reason or IngestFailure.MALFORMED,
         )
-    if len(parsed.attachments) != 1:
-        return _reject_message(
-            message_id,
-            sender=parsed.sender,
-            recipient=recipient,
-            reason=IngestFailure.MULTIPLE_PDFS,
-        )
     if _inbound_address() is None:
         return _result(IngestOutcome.FAILED, IngestFailure.UNEXPECTED_RECIPIENT)
     if _recipient_rejected(recipient):
@@ -123,49 +126,164 @@ def ingest_inbound_email(
     except CodeKeyError:
         return _result(IngestOutcome.FAILED, IngestFailure.CODE_KEY)
 
-    document = parsed.attachments[0].content
-    relative_key = f"documents/{uuid.uuid4().hex}.pdf"
-    if not _document_destination(store, relative_key):
-        return _result(IngestOutcome.FAILED, IngestFailure.STORAGE)
-    uploaded: StoredObject | None = None
+    engine = converter if converter is not None else LibreOfficeConverter()
+    rejections = list(parsed.rejections)
     try:
-        uploaded = store.upload(
-            relative_key,
-            document,
-            content_type="application/pdf",
+        prepared, uploads = _prepare_documents(
+            store, engine, list(parsed.attachments), rejections
         )
-        if not accepted_document_key(store, uploaded.bucket, uploaded.key):
-            if store.allows(uploaded.bucket, uploaded.key):
-                _delete_if_unowned(store, uploaded)
-            return _result(IngestOutcome.FAILED, IngestFailure.STORAGE)
+    except StorageError:
+        return _result(IngestOutcome.FAILED, IngestFailure.STORAGE)
+    if not prepared:
+        _delete_uploads(store, uploads)
+        return _reject_message(
+            message_id,
+            sender=parsed.sender,
+            recipient=recipient,
+            reason=_empty_reason(rejections),
+            rejected_files=_encode_rejections(rejections),
+        )
+
+    names = _unique_names([item["filename"] for item in prepared])
+    for item, name in zip(prepared, names, strict=True):
+        item["filename"] = name
+    try:
         with transaction.atomic():
             job = PrintJob.objects.create(
                 ses_message_id=message_id,
                 sender=parsed.sender,
                 recipient=stored_recipient,
-                bucket=uploaded.bucket,
-                object_key=uploaded.key,
-                byte_size=uploaded.byte_size,
+                bucket=prepared[0]["stored"].bucket,
+                object_key=prepared[0]["stored"].key,
+                byte_size=prepared[0]["stored"].byte_size,
+                document_name="\n".join(item["filename"] for item in prepared)[:1024],
+                rejected_files=_encode_rejections(rejections),
                 status=PrintJobStatus.PENDING_EMAIL,
             )
+            for position, item in enumerate(prepared, start=1):
+                PrintDocument.objects.create(
+                    job=job,
+                    position=position,
+                    original_filename=item["filename"][:255],
+                    source_format=item["source_format"],
+                    printable_format="pdf",
+                    bucket=item["stored"].bucket,
+                    object_key=item["stored"].key,
+                    byte_size=item["stored"].byte_size,
+                    status=PrintDocumentStatus.STORED,
+                )
             issue_access_code(job)
     except IntegrityError:
-        _delete_if_unowned(store, uploaded)
+        _delete_uploads(store, uploads)
         winner = _existing(message_id)
         return IngestResult(
             outcome=IngestOutcome.DUPLICATE,
             job_id=winner.id if winner is not None else None,
         )
     except CodeKeyError:
-        _delete_if_unowned(store, uploaded)
+        _delete_uploads(store, uploads)
         return _result(IngestOutcome.FAILED, IngestFailure.CODE_KEY)
     except DatabaseError:
-        _delete_if_unowned(store, uploaded)
+        _delete_uploads(store, uploads)
         return _result(IngestOutcome.FAILED, IngestFailure.DATABASE)
     except StorageError:
+        _delete_uploads(store, uploads)
         return _result(IngestOutcome.FAILED, IngestFailure.STORAGE)
 
     return IngestResult(outcome=IngestOutcome.ACCEPTED, job_id=job.id)
+
+
+def _prepare_documents(store, engine, attachments, rejections):
+    prepared = []
+    uploads: list[StoredObject] = []
+    for attachment in attachments:
+        try:
+            pdf = engine.to_pdf(
+                attachment.content, source_format=attachment.source_format
+            )
+        except ConversionError:
+            rejections.append(
+                _rejection(attachment.filename, FileRejection.CORRUPT)
+            )
+            continue
+        if not isinstance(pdf, (bytes, bytearray)) or not pdf.startswith(b"%PDF-"):
+            rejections.append(
+                _rejection(attachment.filename, FileRejection.CORRUPT)
+            )
+            continue
+        relative_key = f"documents/{uuid.uuid4().hex}.pdf"
+        if not _document_destination(store, relative_key):
+            _delete_uploads(store, uploads)
+            raise StorageError("Object key is outside the PrintMe prefix")
+        try:
+            uploaded = store.upload(
+                relative_key,
+                bytes(pdf),
+                content_type="application/pdf",
+            )
+        except StorageError:
+            _delete_uploads(store, uploads)
+            raise
+        uploads.append(uploaded)
+        if not accepted_document_key(store, uploaded.bucket, uploaded.key):
+            _delete_uploads(store, uploads)
+            raise StorageError("Object key is outside the PrintMe prefix")
+        prepared.append(
+            {
+                "filename": display_filename(attachment.filename) or "document.pdf",
+                "source_format": attachment.source_format,
+                "stored": uploaded,
+            }
+        )
+    return prepared, uploads
+
+
+def _rejection(filename: str, reason: str):
+    return RejectedFile(display_filename(filename) or "attachment", reason)
+
+
+def _empty_reason(rejections) -> str:
+    reasons = {item.reason for item in rejections}
+    if not reasons or reasons == {FileRejection.UNSUPPORTED}:
+        return EmailRejection.NON_PDF
+    return IngestFailure.NO_SUPPORTED_DOCUMENT
+
+
+def _encode_rejections(rejections) -> str:
+    allowed = {
+        FileRejection.UNSUPPORTED,
+        FileRejection.OVERSIZED,
+        FileRejection.CORRUPT,
+        FileRejection.EXCESS,
+    }
+    lines = []
+    for item in rejections:
+        reason = item.reason if item.reason in allowed else FileRejection.UNSUPPORTED
+        name = display_filename(item.filename) or "attachment"
+        lines.append(f"{name}\t{reason}")
+    return "\n".join(lines)[:4000]
+
+
+def _unique_names(names: list[str]) -> list[str]:
+    seen: dict[str, int] = {}
+    unique = []
+    for name in names:
+        count = seen.get(name, 0) + 1
+        seen[name] = count
+        if count == 1:
+            unique.append(name)
+            continue
+        stem, dot, extension = name.rpartition(".")
+        if dot:
+            unique.append(f"{stem} ({count}){dot}{extension}")
+        else:
+            unique.append(f"{name} ({count})")
+    return unique
+
+
+def _delete_uploads(storage: ObjectStorage, uploads: list[StoredObject]) -> None:
+    for uploaded in uploads:
+        _delete_if_unowned(storage, uploaded)
 
 
 def validated_message_id(value: object) -> str | None:
@@ -235,6 +353,7 @@ def _reject_message(
     sender: str,
     recipient: str,
     reason: str,
+    rejected_files: str = "",
 ) -> IngestResult:
     stored_sender = _normalize_email(sender)
     stored_recipient = _normalize_email(recipient)
@@ -248,6 +367,7 @@ def _reject_message(
                 recipient=stored_recipient,
                 status=PrintJobStatus.REJECTED,
                 failure_reason=reason[:255],
+                rejected_files=rejected_files,
             )
     except IntegrityError:
         winner = _existing(message_id)
@@ -266,6 +386,10 @@ def _delete_if_unowned(storage: ObjectStorage, uploaded: StoredObject | None) ->
     if uploaded is None:
         return
     if PrintJob.objects.filter(
+        bucket=uploaded.bucket, object_key=uploaded.key
+    ).exists():
+        return
+    if PrintDocument.objects.filter(
         bucket=uploaded.bucket, object_key=uploaded.key
     ).exists():
         return

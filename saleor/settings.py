@@ -36,9 +36,10 @@ from .core.schedules import initiated_promotion_webhook_schedule
 from .graphql.executor import patch_executor
 from .graphql.promise import patch_promise
 from .patch_local import patch_local
-from .printme.env import printme_int
+from .printme.env import load_local_printme_env, printme_int
 
 load_dotenv()
+load_local_printme_env()
 django_stubs_ext.monkeypatch()
 
 
@@ -563,6 +564,11 @@ PRINTME_MAX_VERIFY_ATTEMPTS = printme_int(
     "PRINTME_MAX_VERIFY_ATTEMPTS", 5, minimum=1
 )
 PRINTME_CODE_KEY = os.environ.get("PRINTME_CODE_KEY", "")
+# PrintNode. Empty values mean "unset". Read only when a kiosk print is
+# submitted. Never sent to the browser.
+PRINTME_PRINTNODE_API_KEY = os.environ.get("PRINTME_PRINTNODE_API_KEY", "")
+PRINTME_PRINTNODE_PRINTER_ID = os.environ.get("PRINTME_PRINTNODE_PRINTER_ID", "")
+PRINTME_CHANNEL_SLUG = os.environ.get("PRINTME_CHANNEL_SLUG", "printme")
 
 # Google Cloud Storage configuration
 # See https://django-storages.readthedocs.io/en/latest/backends/gcloud.html

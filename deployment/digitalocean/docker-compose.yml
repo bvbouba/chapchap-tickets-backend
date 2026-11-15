@@ -128,5 +128,20 @@ services:
       - printme.env
     command: ["python", "manage.py", "process_inbound_mail"]
 
+  # Deletes expired PrintMe documents. Not a Celery task.
+  printme-expire:
+    <<: *saleor-app
+    profiles: ["printme"]
+    restart: unless-stopped
+    env_file:
+      - .env
+      - printme.env
+    command:
+      [
+        "sh",
+        "-c",
+        "while true; do python manage.py expire_print_jobs; sleep 900; done",
+      ]
+
 volumes:
   redisdata:

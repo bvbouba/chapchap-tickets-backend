@@ -28,7 +28,8 @@ from django.utils import timezone
 from .. import PrintJobStatus
 from ..models import PrintJob
 
-_CODE_BYTES = 18
+_CODE_LENGTH = 8
+_CODE_ALPHABET = "0123456789ABCDEF"
 _MAX_CANDIDATE_LENGTH = 256
 _UNUSABLE_STATUSES = {PrintJobStatus.EXPIRED, PrintJobStatus.REJECTED}
 
@@ -49,9 +50,13 @@ _REJECTED = AccessCodeVerification(ok=False)
 
 
 def generate_access_code() -> str:
-    """Return a new code from ``secrets.token_urlsafe``."""
+    """Return a random 8-character code of digits and the letters A–F.
 
-    return secrets.token_urlsafe(_CODE_BYTES)
+    Older codes are eight digits. Those hashes still verify because digits
+    are part of this alphabet and comparisons keep the original characters.
+    """
+
+    return "".join(secrets.choice(_CODE_ALPHABET) for _ in range(_CODE_LENGTH))
 
 
 def ensure_access_code_key() -> None:
@@ -106,6 +111,16 @@ def open_access_code(ciphertext: str) -> str:
     return plaintext.decode("utf-8")
 
 
+def job_can_release(job: PrintJob) -> bool:
+    """Return whether ``job`` may still accept its release code.
+
+    The check uses the same expiry, lock, and status rules as verification.
+    It does not compare a candidate and does not record an attempt.
+    """
+
+    return isinstance(job, PrintJob) and not _is_unusable(job)
+
+
 def verify_access_code(job: PrintJob | None, candidate: str) -> AccessCodeVerification:
     """Check ``candidate`` without disclosing why a check failed.
 
@@ -115,8 +130,9 @@ def verify_access_code(job: PrintJob | None, candidate: str) -> AccessCodeVerifi
     """
 
     if not isinstance(candidate, str):
-        _burn_guess(secrets.token_urlsafe(_CODE_BYTES))
+        _burn_guess(generate_access_code())
         return _REJECTED
+    candidate = candidate.upper()
     if not isinstance(job, PrintJob):
         _burn_guess(candidate)
         return _REJECTED
@@ -194,4 +210,4 @@ def _burn_guess(candidate: str) -> None:
 
 @lru_cache(maxsize=1)
 def _dummy_hash() -> str:
-    return make_password(secrets.token_urlsafe(_CODE_BYTES))
+    return make_password(generate_access_code())

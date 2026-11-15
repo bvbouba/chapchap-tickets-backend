@@ -1,10 +1,13 @@
-"""Parse an inbound RFC 5322 message and keep only PDF attachments.
+"""Parse an inbound RFC 5322 message into printable files and rejections.
 
-The parser returns structured data to its caller. It does not log message
-bodies or document bytes, and it does not write attachments to storage.
+PDF and modern Word documents are accepted individually. Other files are
+named in the rejection list and do not fail the rest of the message. The
+parser does not log message bodies or document bytes.
 """
 
 import binascii
+import io
+import zipfile
 from dataclasses import dataclass
 from email import policy
 from email.errors import (
@@ -52,10 +55,30 @@ class EmailRejection:
     NON_PDF = "non_pdf"
 
 
+class FileRejection:
+    UNSUPPORTED = "unsupported"
+    OVERSIZED = "oversized"
+    CORRUPT = "corrupt"
+    EXCESS = "excess"
+
+
+_MAX_ACCEPTED = 10
+_PER_FILE_BYTES = 20 * 1024 * 1024
+_DOCX = "docx"
+_PDF = "pdf"
+
+
 @dataclass(frozen=True)
 class PdfAttachment:
     filename: str
     content: bytes
+    source_format: str = _PDF
+
+
+@dataclass(frozen=True)
+class RejectedFile:
+    filename: str
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -65,6 +88,7 @@ class EmailParseResult:
     sender: str
     attachments: tuple[PdfAttachment, ...]
     failure_reason: str
+    rejections: tuple[RejectedFile, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -107,19 +131,31 @@ def parse_email(
         return _failure(EmailRejection.MISSING_ATTACHMENT, sender)
 
     attachments: list[PdfAttachment] = []
+    rejections: list[RejectedFile] = []
+    file_limit = min(limit, _PER_FILE_BYTES)
     for index, part in enumerate(file_parts, start=1):
-        content = _attachment_bytes(part, limit)
+        filename = _safe_filename(part.get_filename(), index)
+        content = _attachment_bytes(part, file_limit)
         if isinstance(content, str):
-            return _failure(content, sender)
-        if not _has_pdf_magic(content):
-            return _failure(EmailRejection.NON_PDF, sender)
-        attachments.append(
-            PdfAttachment(
-                filename=_safe_filename(part.get_filename(), index), content=content
+            rejections.append(RejectedFile(filename, _file_reason(content)))
+            continue
+        kind = _classify(content)
+        if kind is None:
+            rejections.append(
+                RejectedFile(filename, _content_problem(content, filename))
             )
+            continue
+        if len(attachments) >= _MAX_ACCEPTED:
+            rejections.append(RejectedFile(filename, FileRejection.EXCESS))
+            continue
+        attachments.append(
+            PdfAttachment(filename=filename, content=content, source_format=kind)
         )
     return EmailParseResult(
-        sender=sender, attachments=tuple(attachments), failure_reason=""
+        sender=sender,
+        attachments=tuple(attachments),
+        failure_reason="",
+        rejections=tuple(rejections),
     )
 
 
@@ -155,6 +191,50 @@ def _read_limited(
 
 def _failure(reason: str, sender: str = "") -> EmailParseResult:
     return EmailParseResult(sender=sender, attachments=(), failure_reason=reason)
+
+
+def _file_reason(reason: str) -> str:
+    if reason == EmailRejection.OVERSIZED:
+        return FileRejection.OVERSIZED
+    return FileRejection.CORRUPT
+
+
+def _classify(content: bytes) -> str | None:
+    if _has_pdf_magic(content):
+        return _PDF
+    if _is_docx(content):
+        return _DOCX
+    return None
+
+
+def _content_problem(content: bytes, filename: str) -> str:
+    if content.startswith(b"PK") and not _zip_opens(content):
+        return FileRejection.CORRUPT
+    if filename.lower().endswith(".docx") and content.startswith(b"PK"):
+        return FileRejection.CORRUPT
+    return FileRejection.UNSUPPORTED
+
+
+def _is_docx(content: bytes) -> bool:
+    if not content.startswith(b"PK"):
+        return False
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            names = {name.replace("\\", "/") for name in archive.namelist()}
+    except (zipfile.BadZipFile, RuntimeError, ValueError, OSError):
+        return False
+    if "[Content_Types].xml" not in names:
+        return False
+    return any(name == "word" or name.startswith("word/") for name in names)
+
+
+def _zip_opens(content: bytes) -> bool:
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            archive.namelist()
+    except (zipfile.BadZipFile, RuntimeError, ValueError, OSError):
+        return False
+    return True
 
 
 def _has_structural_defect(message) -> bool:
@@ -229,6 +309,14 @@ def _declared_length(part) -> int | None:
 
 def _has_pdf_magic(content: bytes) -> bool:
     return _PDF_MAGIC in content[:_MAGIC_WINDOW]
+
+
+def display_filename(filename: str) -> str:
+    """Return a single-line filename safe to show in email."""
+
+    cleaned = "".join(character for character in filename if character.isprintable())
+    cleaned = " ".join(cleaned.split()).strip()
+    return cleaned[:255]
 
 
 def _safe_filename(filename: str | None, index: int) -> str:

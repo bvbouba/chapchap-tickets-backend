@@ -147,6 +147,7 @@ def test_valid_pdf_is_stored_as_metadata(printme_settings, caplog):
     assert job.bucket == BUCKET
     assert job.object_key.startswith("raw/documents/")
     assert job.byte_size == len(PDF)
+    assert job.document_name == "notes.txt"
     assert job.code_hash
     assert job.code_ciphertext
     assert storage.objects[job.object_key][0] == PDF
@@ -185,7 +186,7 @@ def test_invalid_attachment_is_rejected_without_storage(printme_settings):
     _assert_document_absent(job, b"not a pdf")
 
 
-def test_multiple_pdfs_are_rejected_without_storage(printme_settings):
+def test_multiple_pdfs_become_one_order(printme_settings):
     # given
     storage = MemoryStorage()
     message = EmailMessage()
@@ -203,13 +204,16 @@ def test_multiple_pdfs_are_rejected_without_storage(printme_settings):
     result = _ingest(storage, message.as_bytes())
 
     # then
-    assert result.outcome == IngestOutcome.REJECTED
-    assert result.failure_reason == IngestFailure.MULTIPLE_PDFS
+    assert result.outcome == IngestOutcome.ACCEPTED
     job = PrintJob.objects.get(pk=result.job_id)
-    assert job.status == PrintJobStatus.REJECTED
-    assert job.object_key == ""
-    assert job.byte_size is None
-    assert storage.objects == {}
+    documents = list(job.documents.order_by("position"))
+    assert job.status == PrintJobStatus.PENDING_EMAIL
+    assert job.code_hash
+    assert [item.original_filename for item in documents] == ["one.pdf", "two.pdf"]
+    assert [item.position for item in documents] == [1, 2]
+    assert len(storage.objects) == 2
+    assert all(item.object_key.startswith("raw/documents/") for item in documents)
+    assert documents[0].object_key != documents[1].object_key
 
 
 def test_unexpected_recipient_is_rejected(printme_settings):
@@ -421,6 +425,200 @@ def test_pdf_is_stored_only_under_raw_documents(printme_settings):
     assert rejected.outcome == IngestOutcome.FAILED
     assert rejected.failure_reason == IngestFailure.STORAGE
     assert outside.objects == {}
+
+
+def test_duplicate_filenames_do_not_share_a_storage_key(printme_settings):
+    # given
+    storage = MemoryStorage()
+    message = EmailMessage()
+    message["From"] = f"Print Customer <{SENDER}>"
+    message["To"] = RECIPIENT
+    message.set_content("Two copies.")
+    message.add_attachment(
+        PDF, maintype="application", subtype="pdf", filename="report.pdf"
+    )
+    message.add_attachment(
+        OTHER_PDF, maintype="application", subtype="pdf", filename="report.pdf"
+    )
+
+    # when
+    result = _ingest(storage, message.as_bytes())
+
+    # then
+    job = PrintJob.objects.get(pk=result.job_id)
+    documents = list(job.documents.order_by("position"))
+    assert [item.original_filename for item in documents] == [
+        "report.pdf",
+        "report (2).pdf",
+    ]
+    assert documents[0].object_key != documents[1].object_key
+    assert len(storage.objects) == 2
+
+
+def test_partial_acceptance_keeps_one_code_and_names_the_rejection(printme_settings):
+    # given
+    storage = MemoryStorage()
+    message = EmailMessage()
+    message["From"] = f"Print Customer <{SENDER}>"
+    message["To"] = RECIPIENT
+    message.set_content("One good file.")
+    message.add_attachment(
+        PDF, maintype="application", subtype="pdf", filename="notes.txt"
+    )
+    message.add_attachment(
+        b"not a pdf", maintype="image", subtype="png", filename="photo.png"
+    )
+
+    # when
+    result = _ingest(storage, message.as_bytes())
+
+    # then
+    assert result.outcome == IngestOutcome.ACCEPTED
+    job = PrintJob.objects.get(pk=result.job_id)
+    assert job.status == PrintJobStatus.PENDING_EMAIL
+    assert job.code_hash
+    assert job.documents.count() == 1
+    assert job.documents.get().original_filename == "notes.txt"
+    assert "photo.png\tunsupported" in job.rejected_files
+    assert len(storage.objects) == 1
+
+
+def test_rejected_files_do_not_receive_a_code(printme_settings):
+    # given
+    storage = MemoryStorage()
+    message = EmailMessage()
+    message["From"] = f"Print Customer <{SENDER}>"
+    message["To"] = RECIPIENT
+    message.set_content("Nothing printable.")
+    message.add_attachment(
+        b"not a pdf", maintype="image", subtype="png", filename="photo.png"
+    )
+    message.add_attachment(
+        b"PK\x03\x04broken", maintype="application", subtype="zip", filename="bad.docx"
+    )
+
+    # when
+    result = _ingest(storage, message.as_bytes())
+
+    # then
+    assert result.outcome == IngestOutcome.REJECTED
+    job = PrintJob.objects.get(pk=result.job_id)
+    assert job.status == PrintJobStatus.REJECTED
+    assert job.code_hash == ""
+    assert job.code_ciphertext == ""
+    assert job.documents.count() == 0
+    assert "photo.png\tunsupported" in job.rejected_files
+    assert "bad.docx\tcorrupt" in job.rejected_files
+    assert storage.objects == {}
+
+
+def test_docx_uses_the_supplied_converter(printme_settings):
+    # given
+    storage = MemoryStorage()
+    converted = b"%PDF-1.4\nconverted\n%%EOF\n"
+    seen = []
+
+    class FakeConverter:
+        def to_pdf(self, content, *, source_format):
+            seen.append(source_format)
+            return converted
+
+    message = EmailMessage()
+    message["From"] = f"Print Customer <{SENDER}>"
+    message["To"] = RECIPIENT
+    message.set_content("Word file.")
+    message.add_attachment(
+        _docx_bytes(),
+        maintype="application",
+        subtype="vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename="letter.docx",
+    )
+
+    # when
+    result = _ingest(storage, message.as_bytes(), converter=FakeConverter())
+
+    # then
+    assert seen == ["docx"]
+    job = PrintJob.objects.get(pk=result.job_id)
+    document = job.documents.get()
+    assert result.outcome == IngestOutcome.ACCEPTED
+    assert document.source_format == "docx"
+    assert document.printable_format == "pdf"
+    assert document.original_filename == "letter.docx"
+    assert storage.objects[document.object_key][0] == converted
+    assert job.code_hash
+
+
+def test_database_failure_deletes_every_new_upload(printme_settings, monkeypatch):
+    # given
+    storage = MemoryStorage()
+    message = EmailMessage()
+    message["From"] = f"Print Customer <{SENDER}>"
+    message["To"] = RECIPIENT
+    message.set_content("Two files.")
+    message.add_attachment(
+        PDF, maintype="application", subtype="pdf", filename="one.pdf"
+    )
+    message.add_attachment(
+        OTHER_PDF, maintype="application", subtype="pdf", filename="two.pdf"
+    )
+
+    def fail_create(*args, **kwargs):
+        raise DatabaseError("database failed")
+
+    monkeypatch.setattr(PrintJob.objects, "create", fail_create)
+
+    # when
+    result = _ingest(storage, message.as_bytes(), ses_message_id="two-file-failure")
+
+    # then
+    assert result.outcome == IngestOutcome.FAILED
+    assert result.failure_reason == IngestFailure.DATABASE
+    assert storage.objects == {}
+    assert len(storage.deletes) == 2
+
+
+def test_cleanup_does_not_delete_an_object_owned_by_a_document(printme_settings):
+    # given
+    storage = MemoryStorage()
+    job = PrintJob.objects.create(
+        ses_message_id="document-owner",
+        sender=SENDER,
+        recipient=RECIPIENT,
+    )
+    from saleor.printme.models import PrintDocument
+
+    document = PrintDocument.objects.create(
+        job=job,
+        position=1,
+        original_filename="owned.pdf",
+        source_format="pdf",
+        bucket=BUCKET,
+        object_key="raw/documents/owned.pdf",
+        byte_size=3,
+    )
+    storage.objects[document.object_key] = (b"%PDF-owned", "application/pdf")
+
+    # when
+    _delete_if_unowned(
+        storage,
+        StoredObject(bucket=BUCKET, key=document.object_key, byte_size=3),
+    )
+
+    # then
+    assert storage.deletes == []
+    assert storage.objects[document.object_key][0] == b"%PDF-owned"
+
+
+def _docx_bytes():
+    import io
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
+        archive.writestr("word/document.xml", "<document/>")
+    return buffer.getvalue()
 
 
 def test_unexpected_object_location_is_rejected(printme_settings):

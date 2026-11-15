@@ -1,10 +1,9 @@
 from django.conf import settings
 from django.conf.urls.static import static
-from django.contrib.staticfiles.views import serve
-from django.urls import include, re_path,path
-from django.views.decorators.csrf import csrf_exempt
 from django.contrib import admin
-
+from django.contrib.staticfiles.views import serve
+from django.urls import path, re_path
+from django.views.decorators.csrf import csrf_exempt
 
 from .core.views import jwks
 from .graphql.api import backend, schema
@@ -13,6 +12,15 @@ from .plugins.views import (
     handle_global_plugin_webhook,
     handle_plugin_per_channel_webhook,
     handle_plugin_webhook,
+)
+from .printme.kiosk.views import (
+    kiosk,
+    kiosk_clear,
+    kiosk_preview,
+    kiosk_print,
+    kiosk_print_status,
+    kiosk_quote,
+    kiosk_session,
 )
 from .product.views import digital_product
 from .thumbnail.views import handle_thumbnail
@@ -54,6 +62,25 @@ urlpatterns = [
         name="thumbnail",
     ),
     re_path(r"^\.well-known/jwks.json$", jwks, name="jwks"),
+    path("printme/kiosk/", kiosk, name="printme-kiosk"),
+    path("printme/kiosk/session/", kiosk_session, name="printme-kiosk-session"),
+    path(
+        "printme/kiosk/session/clear/",
+        kiosk_clear,
+        name="printme-kiosk-clear",
+    ),
+    path(
+        "printme/kiosk/documents/<uuid:document_id>/preview/",
+        kiosk_preview,
+        name="printme-kiosk-preview",
+    ),
+    path("printme/kiosk/quote/", kiosk_quote, name="printme-kiosk-quote"),
+    path("printme/kiosk/prints/", kiosk_print, name="printme-kiosk-print"),
+    path(
+        "printme/kiosk/prints/<uuid:submission_id>/",
+        kiosk_print_status,
+        name="printme-kiosk-print-status",
+    ),
 ]
 
 if settings.DEBUG:

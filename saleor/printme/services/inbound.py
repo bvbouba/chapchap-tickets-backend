@@ -19,11 +19,23 @@ from .storage import ObjectStorage, StorageError, raw_inbound_key
 logger = logging.getLogger("saleor.printme")
 
 _RECEIVED = "Received"
-_SNS_SKIP = {"SubscriptionConfirmation", "UnsubscribeConfirmation"}
+_SETUP_MESSAGE_ID = "AMAZON_SES_SETUP_NOTIFICATION"
+_SNS_CONTROL = {
+    "SubscriptionConfirmation": "subscription_confirmation",
+    "UnsubscribeConfirmation": "unsubscribe_confirmation",
+}
 
 
 class NoticeError(Exception):
     """The queue body is not a usable inbound-mail notification."""
+
+
+class ControlNotice(Exception):
+    """An SNS control message to acknowledge without changing the subscription."""
+
+    def __init__(self, kind: str):
+        self.kind = kind
+        super().__init__(kind)
 
 
 @dataclass(frozen=True)
@@ -43,8 +55,9 @@ def parse_queue_body(body: str) -> InboundNotice:
     """Read a raw SES receipt or an SNS notification that wraps one."""
 
     payload = _json_object(body)
-    if payload.get("Type") in _SNS_SKIP:
-        raise NoticeError("malformed")
+    control = _SNS_CONTROL.get(payload.get("Type"))
+    if control is not None:
+        raise ControlNotice(control)
     if payload.get("Type") == "Notification":
         message = payload.get("Message")
         if not isinstance(message, str):
@@ -94,11 +107,15 @@ def handle_delivery(
 
     try:
         notice = parse_queue_body(body)
+    except ControlNotice as exc:
+        return _ack(queue, receipt_handle, "-", exc.kind)
     except NoticeError:
         logger.info("printme inbound - malformed")
         return "malformed"
 
     message_id = notice.ses_message_id
+    if message_id == _SETUP_MESSAGE_ID:
+        return _ack(queue, receipt_handle, message_id, "ignored")
     if not storage.allows(notice.bucket, notice.object_key):
         logger.info("printme inbound %s unexpected_object", message_id)
         return "unexpected_object"

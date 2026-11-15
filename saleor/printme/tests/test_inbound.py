@@ -170,6 +170,106 @@ def test_valid_notification_is_ingested_and_acknowledged(
     assert "Access code:" not in caplog.text
 
 
+def test_two_pdfs_are_one_order_and_the_queue_message_is_acknowledged(
+    printme_settings, monkeypatch
+):
+    # given
+    message = EmailMessage()
+    message["From"] = f"Print Customer <{SENDER}>"
+    message["To"] = RECIPIENT
+    message.set_content("Two files.")
+    message.add_attachment(
+        PDF, maintype="application", subtype="pdf", filename="one.pdf"
+    )
+    message.add_attachment(
+        PDF, maintype="application", subtype="pdf", filename="two.pdf"
+    )
+    storage = MemoryStorage()
+    storage.objects[SOURCE_KEY] = message.as_bytes()
+    sends = _record_sends(monkeypatch)
+    queue = FakeQueue()
+
+    # when
+    status = handle_delivery(_body(), "rh-two", queue=queue, storage=storage)
+
+    # then
+    assert status == "sent"
+    assert queue.deleted == ["rh-two"]
+    job = PrintJob.objects.get()
+    assert job.documents.count() == 2
+    assert job.code_hash
+    assert "one.pdf" in sends[0]
+    assert "two.pdf" in sends[0]
+    assert "Release code:" in sends[0]
+    assert SOURCE_KEY not in storage.objects
+
+
+def test_mail_failure_for_multiple_documents_stays_on_the_queue(
+    printme_settings, monkeypatch
+):
+    # given
+    message = EmailMessage()
+    message["From"] = f"Print Customer <{SENDER}>"
+    message["To"] = RECIPIENT
+    message.set_content("Two files.")
+    message.add_attachment(
+        PDF, maintype="application", subtype="pdf", filename="one.pdf"
+    )
+    message.add_attachment(
+        PDF, maintype="application", subtype="pdf", filename="two.pdf"
+    )
+    storage = MemoryStorage()
+    storage.objects[SOURCE_KEY] = message.as_bytes()
+    queue = FakeQueue()
+
+    def fail_send(self, fail_silently=False):
+        raise OSError("mail unavailable")
+
+    monkeypatch.setattr(DjangoEmail, "send", fail_send)
+
+    # when
+    status = handle_delivery(_body(), "rh-two", queue=queue, storage=storage)
+
+    # then
+    assert status == "notify_failed"
+    assert queue.deleted == []
+    job = PrintJob.objects.get()
+    assert job.status == PrintJobStatus.PENDING_EMAIL
+    assert job.documents.count() == 2
+    assert job.code_ciphertext
+    assert SOURCE_KEY in storage.objects
+
+
+def test_all_rejected_attachments_are_acknowledged_without_a_code(
+    printme_settings, monkeypatch
+):
+    # given
+    message = EmailMessage()
+    message["From"] = f"Print Customer <{SENDER}>"
+    message["To"] = RECIPIENT
+    message.set_content("Nothing printable.")
+    message.add_attachment(
+        b"not a pdf", maintype="image", subtype="png", filename="photo.png"
+    )
+    storage = MemoryStorage()
+    storage.objects[SOURCE_KEY] = message.as_bytes()
+    sends = _record_sends(monkeypatch)
+    queue = FakeQueue()
+
+    # when
+    status = handle_delivery(_body(), "rh-none", queue=queue, storage=storage)
+
+    # then
+    assert status == "sent"
+    assert queue.deleted == ["rh-none"]
+    job = PrintJob.objects.get()
+    assert job.status == PrintJobStatus.REJECTED
+    assert job.code_hash == ""
+    assert job.documents.count() == 0
+    assert "Release code:" not in sends[0]
+    assert "photo.png" in sends[0]
+
+
 def test_malformed_notification_is_not_acknowledged(printme_settings):
     # given
     storage = MemoryStorage()
@@ -516,6 +616,117 @@ def test_expired_pending_job_is_acknowledged_without_sending(
     assert job.status == PrintJobStatus.PENDING_EMAIL
     assert job.code_ciphertext == "ciphertext-token"
     assert job.code_hash == "pbkdf2_sha256$1$salt$hash"
+
+
+def test_ses_setup_notification_is_acknowledged_without_a_job(
+    printme_settings, monkeypatch
+):
+    # given
+    storage = MemoryStorage()
+    storage.objects[SOURCE_KEY] = _raw_email()
+    sends = _record_sends(monkeypatch)
+    queue = FakeQueue()
+
+    # when
+    status = handle_delivery(
+        _body(message_id="AMAZON_SES_SETUP_NOTIFICATION"),
+        "rh-setup",
+        queue=queue,
+        storage=storage,
+    )
+
+    # then
+    assert status == "ignored"
+    assert queue.deleted == ["rh-setup"]
+    assert storage.reads == []
+    assert storage.deletes == []
+    assert sends == []
+    assert PrintJob.objects.count() == 0
+
+
+@pytest.mark.parametrize(
+    ("sns_type", "status"),
+    [
+        ("SubscriptionConfirmation", "subscription_confirmation"),
+        ("UnsubscribeConfirmation", "unsubscribe_confirmation"),
+    ],
+)
+def test_sns_control_message_is_acknowledged_without_action(
+    printme_settings, caplog, sns_type, status
+):
+    # given
+    storage = MemoryStorage()
+    storage.objects[SOURCE_KEY] = _raw_email()
+    queue = FakeQueue()
+    subscribe_url = "https://sns.example.com/confirm?Token=do-not-fetch"
+    body = json.dumps(
+        {
+            "Type": sns_type,
+            "MessageId": "sns-control-1",
+            "Token": "do-not-fetch",
+            "SubscribeURL": subscribe_url,
+        }
+    )
+    caplog.set_level("INFO", logger="saleor.printme")
+
+    # when
+    result = handle_delivery(body, "rh-control", queue=queue, storage=storage)
+
+    # then
+    assert result == status
+    assert queue.deleted == ["rh-control"]
+    assert storage.reads == []
+    assert storage.deletes == []
+    assert PrintJob.objects.count() == 0
+    assert "do-not-fetch" not in caplog.text
+    assert "SubscribeURL" not in caplog.text
+
+
+def test_ses_send_failure_is_logged_and_left_on_the_queue(
+    printme_settings, caplog
+):
+    # given
+    from botocore.exceptions import ClientError
+
+    storage = MemoryStorage()
+    storage.objects[SOURCE_KEY] = _raw_email()
+    queue = FakeQueue()
+    caplog.set_level("INFO", logger="saleor.printme")
+
+    class RejectingSes:
+        def send_email(self, **kwargs):
+            raise ClientError(
+                {
+                    "Error": {
+                        "Code": "MessageRejected",
+                        "Message": "DO-NOT-LOG-BODY sender@example.com",
+                    }
+                },
+                "SendEmail",
+            )
+
+    # when
+    with override_settings(PRINTME_EMAIL_BACKEND="ses"):
+        status = handle_delivery(
+            _body(),
+            "rh-ses",
+            queue=queue,
+            storage=storage,
+            ses_client=RejectingSes(),
+        )
+
+    # then
+    assert status == "notify_failed"
+    assert queue.deleted == []
+    assert SOURCE_KEY in storage.objects
+    assert SOURCE_KEY not in storage.deletes
+    assert "printme notify ClientError MessageRejected" in caplog.text
+    assert "DO-NOT-LOG-BODY" not in caplog.text
+    assert "sender@example.com" not in caplog.text
+    assert "Access code:" not in caplog.text
+    job = PrintJob.objects.get()
+    assert job.status == PrintJobStatus.PENDING_EMAIL
+    assert job.code_ciphertext
 
 
 class _RejectingS3:

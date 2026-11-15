@@ -1,3 +1,4 @@
+import os
 from io import StringIO
 
 import pytest
@@ -5,7 +6,7 @@ from cryptography.fernet import Fernet
 from django.core.exceptions import ImproperlyConfigured
 from django.test import override_settings
 
-from saleor.printme.env import printme_int
+from saleor.printme.env import load_local_printme_env, printme_int
 from saleor.printme.management.commands.process_inbound_mail import (
     Command,
     worker_startup_error,
@@ -123,3 +124,27 @@ def test_integer_below_the_minimum_is_rejected(monkeypatch):
     # when / then
     with pytest.raises(ImproperlyConfigured, match="must be 1 or greater"):
         printme_int("PRINTME_MAX_VERIFY_ATTEMPTS", 5, minimum=1)
+
+
+def test_local_printme_env_fills_missing_names(tmp_path, monkeypatch):
+    env_path = tmp_path / "printme.env"
+    env_path.write_text("PRINTME_S3_BUCKET=printme-local-bucket\n", encoding="utf-8")
+    monkeypatch.delenv("PRINTME_S3_BUCKET", raising=False)
+
+    load_local_printme_env(env_path)
+
+    assert os.environ["PRINTME_S3_BUCKET"] == "printme-local-bucket"
+
+
+def test_local_printme_env_does_not_override_existing_values(tmp_path, monkeypatch):
+    env_path = tmp_path / "printme.env"
+    env_path.write_text("PRINTME_S3_BUCKET=from-file\n", encoding="utf-8")
+    monkeypatch.setenv("PRINTME_S3_BUCKET", "already-set")
+
+    load_local_printme_env(env_path)
+
+    assert os.environ["PRINTME_S3_BUCKET"] == "already-set"
+
+
+def test_missing_local_printme_env_is_ignored(tmp_path):
+    load_local_printme_env(tmp_path / "printme.env")

@@ -4,7 +4,7 @@ import pytest
 from django.utils import timezone
 
 from saleor.printme import PrintJobStatus
-from saleor.printme.models import PrintJob
+from saleor.printme.models import PrintDocument, PrintDocumentStatus, PrintJob
 from saleor.printme.services.cleanup import expire_due_jobs
 from saleor.printme.services.codes import verify_access_code
 from saleor.printme.services.notify import NotifyOutcome, notify_print_job
@@ -24,6 +24,7 @@ class MemoryStorage:
         self.objects = {}
         self.deletes = []
         self.fail_delete = False
+        self.fail_keys = set()
 
     def allows(self, bucket, key):
         return (
@@ -47,7 +48,7 @@ class MemoryStorage:
         return StoredObject(bucket=self.bucket, key=key, byte_size=len(content))
 
     def delete(self, key):
-        if self.fail_delete:
+        if self.fail_delete or key in self.fail_keys:
             raise StorageError("delete failed")
         self.deletes.append(key)
         self.objects.pop(key, None)
@@ -211,3 +212,95 @@ def test_expired_job_cannot_validate_a_code_or_be_notified(monkeypatch):
     assert job.code_hash == ""
     assert job.code_ciphertext == ""
     assert PDF_KEY not in storage.objects
+
+
+def test_cleanup_deletes_every_child_document():
+    # given
+    storage = MemoryStorage()
+    job = _job(key="")
+    first = _document(job, 1, "raw/documents/one.pdf")
+    second = _document(job, 2, "raw/documents/two.pdf")
+    storage.objects[first.object_key] = PDF
+    storage.objects[second.object_key] = PDF
+
+    # when
+    expired = expire_due_jobs(storage=storage)
+
+    # then
+    assert expired == 1
+    job.refresh_from_db()
+    assert job.status == PrintJobStatus.EXPIRED
+    assert job.code_hash == ""
+    assert job.code_ciphertext == ""
+    assert storage.objects == {}
+    assert first.object_key in storage.deletes
+    assert second.object_key in storage.deletes
+    assert job.documents.filter(status=PrintDocumentStatus.STORED).count() == 0
+
+
+def test_child_deletion_failure_keeps_the_order_retryable():
+    # given
+    storage = MemoryStorage()
+    job = _job(key="")
+    first = _document(job, 1, "raw/documents/one.pdf")
+    second = _document(job, 2, "raw/documents/two.pdf")
+    storage.objects[first.object_key] = PDF
+    storage.objects[second.object_key] = PDF
+    storage.fail_keys = {second.object_key}
+
+    # when
+    expired = expire_due_jobs(storage=storage)
+
+    # then
+    assert expired == 0
+    job.refresh_from_db()
+    assert job.status == PrintJobStatus.NOTIFIED
+    assert job.code_hash
+    assert job.code_ciphertext == "ciphertext-token"
+    first.refresh_from_db()
+    second.refresh_from_db()
+    assert first.status == PrintDocumentStatus.DELETED
+    assert second.status == PrintDocumentStatus.STORED
+    assert first.object_key not in storage.objects
+    assert storage.objects[second.object_key] == PDF
+
+    # when
+    storage.fail_keys = set()
+    retried = expire_due_jobs(storage=storage)
+
+    # then
+    assert retried == 1
+    job.refresh_from_db()
+    assert job.status == PrintJobStatus.EXPIRED
+    assert job.code_hash == ""
+    assert second.object_key not in storage.objects
+
+
+def test_missing_child_object_is_already_deleted():
+    # given
+    storage = MemoryStorage()
+    job = _job(key="")
+    document = _document(job, 1, "raw/documents/gone.pdf")
+
+    # when
+    expired = expire_due_jobs(storage=storage)
+
+    # then
+    assert expired == 1
+    document.refresh_from_db()
+    assert document.status == PrintDocumentStatus.DELETED
+    job.refresh_from_db()
+    assert job.status == PrintJobStatus.EXPIRED
+    assert job.code_hash == ""
+
+
+def _document(job, position, key):
+    return PrintDocument.objects.create(
+        job=job,
+        position=position,
+        original_filename=f"file-{position}.pdf",
+        source_format="pdf",
+        bucket=BUCKET,
+        object_key=key,
+        byte_size=len(PDF),
+    )

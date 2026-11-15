@@ -7,7 +7,7 @@ from django.contrib.auth.hashers import check_password
 from django.test import override_settings
 from django.utils import timezone
 
-from saleor.printme.models import PrintJob
+from saleor.printme.models import PrintDocument, PrintJob
 from saleor.printme.services.codes import (
     AccessCodeVerification,
     CodeKeyError,
@@ -32,25 +32,31 @@ def _job(**overrides):
 
 
 @override_settings(PRINTME_CODE_TTL_HOURS=24, PRINTME_CODE_KEY="")
-def test_code_hash_differs_from_plaintext(monkeypatch, caplog):
-    # given
+def test_generated_code_uses_digits_and_letters(monkeypatch):
     import saleor.printme.services.codes as codes
 
-    calls = []
-    real_token = codes.secrets.token_urlsafe
+    seen = []
 
-    def spy(nbytes=None):
-        calls.append(nbytes)
-        return real_token(nbytes)
+    def choice(alphabet):
+        seen.append(alphabet)
+        return "C"
 
-    monkeypatch.setattr(codes.secrets, "token_urlsafe", spy)
+    monkeypatch.setattr(codes.secrets, "choice", choice)
+
+    assert codes.generate_access_code() == "CCCCCCCC"
+    assert seen == ["0123456789ABCDEF"] * 8
+
+
+def test_code_hash_differs_from_plaintext(caplog):
+    # given
     job = _job()
 
     # when
     code = issue_access_code(job)
 
     # then
-    assert calls[0] == 18
+    assert len(code) == 8
+    assert set(code) <= set("0123456789ABCDEF")
     assert job.code_hash
     assert job.code_hash != code
     assert code not in job.code_hash
@@ -189,3 +195,37 @@ def test_invalid_code_key_does_not_store_a_code():
     job.refresh_from_db()
     assert job.code_hash == ""
     assert job.code_ciphertext == ""
+
+
+def test_eight_digit_code_keeps_leading_zeros(monkeypatch, caplog):
+    # given
+    import saleor.printme.services.codes as codes
+
+    monkeypatch.setattr(codes, "generate_access_code", lambda: "00001234")
+    job = _job()
+
+    # when
+    code = issue_access_code(job)
+
+    # then
+    assert code == "00001234"
+    assert verify_access_code(job, code) == AccessCodeVerification(ok=True)
+    assert verify_access_code(job, "1234") == _REJECTED
+    assert code not in caplog.text
+    job.refresh_from_db()
+    assert job.failed_attempts == 1
+    assert job.expires_at - timezone.now() > timedelta(hours=23, minutes=59)
+    PrintDocument.objects.create(
+        job=job,
+        position=1,
+        original_filename="job.pdf",
+        source_format="pdf",
+        bucket="printme-test-bucket",
+        object_key="raw/documents/job.pdf",
+        byte_size=4,
+    )
+    job.refresh_from_db()
+    assert verify_access_code(job, "00001234").ok is True
+    job.locked_at = timezone.now()
+    job.save(update_fields=["locked_at", "updated_at"])
+    assert verify_access_code(job, "00001234").ok is False

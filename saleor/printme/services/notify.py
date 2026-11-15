@@ -14,6 +14,7 @@ so a duplicate call does not send it again. That timestamp is not an
 access-code lock.
 """
 
+import logging
 import smtplib
 from dataclasses import dataclass
 from email.utils import parseaddr
@@ -26,10 +27,13 @@ from django.db import transaction
 from django.utils import timezone
 
 from .. import PrintJobStatus
-from ..models import PrintJob
+from ..models import PrintDocumentStatus, PrintJob
 from .codes import CodeKeyError, open_access_code
+from .parse_email import display_filename
 
-_CONFIRMATION_SUBJECT = "Your PrintMe access code"
+logger = logging.getLogger("saleor.printme")
+
+_CONFIRMATION_SUBJECT = "Your document is ready to print"
 _REJECTION_SUBJECT = "PrintMe could not print your document"
 _GENERIC_REJECTION = (
     "We could not print this message. Send one PDF file to the print address."
@@ -110,7 +114,9 @@ def _notify_locked(job: PrintJob, ses_client) -> NotifyResult:
             ses_client,
             recipient=job.sender,
             subject=_CONFIRMATION_SUBJECT,
-            body=_confirmation_body(code),
+            body=_confirmation_body(
+                code, _document_names(job), _rejected_lines(job)
+            ),
         )
     except MailDeliveryError:
         return NotifyResult(outcome=NotifyOutcome.FAILED, job_id=str(job.id))
@@ -135,7 +141,7 @@ def _send_rejection(job: PrintJob, ses_client) -> NotifyResult:
             ses_client,
             recipient=job.sender,
             subject=_REJECTION_SUBJECT,
-            body=_rejection_body(job.failure_reason),
+            body=_rejection_body(job),
         )
     except MailDeliveryError:
         return NotifyResult(outcome=NotifyOutcome.FAILED, job_id=str(job.id))
@@ -184,8 +190,40 @@ def _send_ses(client, sender: str, recipient: str, subject: str, body: str) -> N
         )
     except MailDeliveryError:
         raise
-    except Exception:
+    except Exception as exc:
+        _log_mail_failure(exc)
         raise MailDeliveryError("PrintMe email was not accepted") from None
+
+
+def _log_mail_failure(exc: BaseException) -> None:
+    """Log the exception class and a safe AWS error code."""
+
+    code = _client_error_code(exc)
+    if code is None:
+        logger.info("printme notify %s", type(exc).__name__)
+        return
+    logger.info("printme notify %s %s", type(exc).__name__, code)
+
+
+def _client_error_code(exc: BaseException) -> str | None:
+    try:
+        from botocore.exceptions import ClientError
+    except ImportError:
+        return None
+    if not isinstance(exc, ClientError):
+        return None
+    response = getattr(exc, "response", None)
+    if not isinstance(response, dict):
+        return None
+    error = response.get("Error")
+    if not isinstance(error, dict):
+        return None
+    code = error.get("Code")
+    if not isinstance(code, str) or not code or len(code) > 64:
+        return None
+    if any(not (character.isalnum() or character in "._-") for character in code):
+        return None
+    return code
 
 
 def _ses_client(client):
@@ -206,21 +244,82 @@ def _ses_client(client):
     )
 
 
-def _confirmation_body(code: str) -> str:
+_REJECTION_REASON = {
+    "unsupported": "not a PDF or Word document",
+    "oversized": "larger than 20 MB",
+    "corrupt": "could not be read",
+    "excess": "more than 10 documents",
+}
+
+
+def _document_names(job: PrintJob) -> list[str]:
+    stored = job.documents.filter(status=PrintDocumentStatus.STORED).order_by(
+        "position"
+    )
+    names = [
+        display_filename(document.original_filename)
+        for document in stored
+        if display_filename(document.original_filename)
+    ]
+    if names:
+        return names
+    legacy = []
+    for line in str(job.document_name or "").splitlines():
+        cleaned = display_filename(line)
+        if cleaned:
+            legacy.append(cleaned)
+    return legacy or ["document.pdf"]
+
+
+def _rejected_lines(job: PrintJob) -> list[str]:
+    lines = []
+    for raw in str(job.rejected_files or "").splitlines():
+        filename, separator, reason = raw.partition("\t")
+        name = display_filename(filename)
+        if not separator or not name:
+            continue
+        explanation = _REJECTION_REASON.get(reason, "could not be printed")
+        lines.append(f"{name} — {explanation}")
+    return lines
+
+
+def _confirmation_body(
+    code: str, document_names: list[str], rejected_lines: list[str]
+) -> str:
     hours = int(settings.PRINTME_CODE_TTL_HOURS)
     unit = "hour" if hours == 1 else "hours"
+    names = document_names or ["document.pdf"]
+    label = "Document" if len(names) == 1 else "Documents"
+    listed = "\n".join(names)
+    rejected = ""
+    if rejected_lines:
+        rejected = "\nNot printed:\n" + "\n".join(rejected_lines) + "\n"
     return (
         "Your document is ready to print.\n"
         "\n"
-        f"Access code: {code}\n"
+        "Show this release code at the print center. "
+        "The staff will use it to find and print your document.\n"
         "\n"
-        f"This code expires in {hours} {unit}. "
-        "Present the code at the print center to collect your document.\n"
+        f"Release code: {code}\n"
+        "\n"
+        f"This code expires in {hours} {unit}.\n"
+        "\n"
+        f"{label}:\n"
+        f"{listed}\n"
+        f"{rejected}"
     )
 
 
-def _rejection_body(reason: str) -> str:
-    return _REJECTION_TEXT.get(reason, _GENERIC_REJECTION)
+def _rejection_body(job: PrintJob) -> str:
+    lines = _rejected_lines(job)
+    if lines:
+        return (
+            "We could not print this message because none of the attached "
+            "files could be used.\n"
+            "\n"
+            "Not printed:\n" + "\n".join(lines) + "\n"
+        )
+    return _REJECTION_TEXT.get(job.failure_reason, _GENERIC_REJECTION)
 
 
 def _address(value: str) -> str | None:

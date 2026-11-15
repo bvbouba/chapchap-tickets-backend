@@ -11,7 +11,7 @@ from django.test import override_settings
 from django.utils import timezone
 
 from saleor.printme import PrintJobStatus
-from saleor.printme.models import PrintJob
+from saleor.printme.models import PrintDocument, PrintJob
 from saleor.printme.services.codes import open_access_code, verify_access_code
 from saleor.printme.services.ingest import ingest_inbound_email
 from saleor.printme.services.notify import NotifyOutcome, notify_print_job
@@ -142,9 +142,13 @@ def test_confirmation_uses_the_console_backend(printme_settings, monkeypatch, ca
     captured = capsys.readouterr().out
     assert result.outcome == NotifyOutcome.SENT
     assert len(bodies) == 1
-    assert f"Access code: {code}" in bodies[0]
+    assert len(code) == 8
+    assert set(code) <= set("0123456789ABCDEF")
+    assert f"Release code: {code}" in bodies[0]
     assert "expires in 24 hours" in bodies[0]
     assert "print center" in bodies[0]
+    assert "Document:\njob.pdf" in bodies[0]
+    assert "Your document is ready to print" in bodies[0]
     assert "PRINTME-PDF-MARKER" not in bodies[0]
     assert "PRINTME-PDF-MARKER" not in captured
     assert PDF not in captured.encode()
@@ -154,6 +158,97 @@ def test_confirmation_uses_the_console_backend(printme_settings, monkeypatch, ca
     assert check_password(code, job.code_hash)
     assert storage.objects
     assert b"PRINTME-PDF-MARKER" in next(iter(storage.objects.values()))
+
+
+def test_confirmation_lists_each_document_name(printme_settings, monkeypatch, caplog):
+    # given
+    job, _storage = _accepted_job()
+    code = open_access_code(job.code_ciphertext)
+    job.documents.all().delete()
+    job.document_name = "one.pdf\ntwo.pdf"
+    job.save(update_fields=["document_name", "updated_at"])
+    bodies = _bodies(monkeypatch)
+    caplog.set_level("INFO", logger="saleor.printme")
+
+    # when
+    result = notify_print_job(job)
+
+    # then
+    assert result.outcome == NotifyOutcome.SENT
+    assert "Documents:\none.pdf\ntwo.pdf" in bodies[0]
+    assert f"Release code: {code}" in bodies[0]
+    assert "expires in 24 hours" in bodies[0]
+    assert code not in caplog.text
+
+
+def test_confirmation_names_accepted_and_rejected_files(
+    printme_settings, monkeypatch
+):
+    # given
+    job, _storage = _accepted_job()
+    job.rejected_files = "photo.png\tunsupported"
+    job.save(update_fields=["rejected_files", "updated_at"])
+    bodies = _bodies(monkeypatch)
+
+    # when
+    result = notify_print_job(job)
+
+    # then
+    assert result.outcome == NotifyOutcome.SENT
+    assert "Document:\njob.pdf" in bodies[0]
+    assert "Not printed:\nphoto.png — not a PDF or Word document" in bodies[0]
+    assert "Release code:" in bodies[0]
+
+
+def test_rejection_email_lists_every_rejected_file(printme_settings, monkeypatch):
+    # given
+    job = PrintJob.objects.create(
+        ses_message_id="all-rejected",
+        sender=SENDER,
+        recipient=RECIPIENT,
+        status=PrintJobStatus.REJECTED,
+        failure_reason="no_supported_document",
+        rejected_files="photo.png\tunsupported\nbig.pdf\toversized",
+    )
+    bodies = _bodies(monkeypatch)
+
+    # when
+    result = notify_print_job(job)
+
+    # then
+    assert result.outcome == NotifyOutcome.SENT
+    assert "Release code:" not in bodies[0]
+    assert "photo.png — not a PDF or Word document" in bodies[0]
+    assert "big.pdf — larger than 20 MB" in bodies[0]
+    job.refresh_from_db()
+    assert job.code_hash == ""
+
+
+def test_child_documents_replace_the_legacy_name_list(printme_settings, monkeypatch):
+    # given
+    job, _storage = _accepted_job()
+    job.document_name = "legacy.pdf"
+    job.save(update_fields=["document_name", "updated_at"])
+    document = job.documents.get()
+    document.original_filename = "stored.pdf"
+    document.save(update_fields=["original_filename"])
+    PrintDocument.objects.create(
+        job=job,
+        position=2,
+        original_filename="second.pdf",
+        source_format="pdf",
+        bucket=BUCKET,
+        object_key="raw/documents/second.pdf",
+        byte_size=4,
+    )
+    bodies = _bodies(monkeypatch)
+
+    # when
+    notify_print_job(job)
+
+    # then
+    assert "Documents:\nstored.pdf\nsecond.pdf" in bodies[0]
+    assert "legacy.pdf" not in bodies[0]
 
 
 def test_rejection_notification_has_no_access_code(
@@ -264,11 +359,72 @@ def test_ses_confirmation_is_mocked_and_omits_the_pdf(printme_settings):
     assert call["Source"] == FROM_ADDRESS
     assert call["Destination"] == {"ToAddresses": [SENDER]}
     body = call["Message"]["Body"]["Text"]["Data"]
-    assert f"Access code: {code}" in body
+    assert call["Message"]["Subject"]["Data"] == "Your document is ready to print"
+    assert f"Release code: {code}" in body
+    assert "Document:\njob.pdf" in body
     assert "PRINTME-PDF-MARKER" not in body
     assert "%PDF-" not in body
     job.refresh_from_db()
     assert job.code_ciphertext == ""
+
+
+@override_settings(PRINTME_EMAIL_BACKEND="ses")
+def test_ses_client_error_logs_only_the_error_code(printme_settings, caplog):
+    # given
+    from botocore.exceptions import ClientError
+
+    job, _storage = _accepted_job()
+    code = open_access_code(job.code_ciphertext)
+    ciphertext = job.code_ciphertext
+    caplog.set_level("INFO", logger="saleor.printme")
+
+    class RejectingSes:
+        def send_email(self, **kwargs):
+            raise ClientError(
+                {
+                    "Error": {
+                        "Code": "MessageRejected",
+                        "Message": f"DO-NOT-LOG {code} {SENDER}",
+                    }
+                },
+                "SendEmail",
+            )
+
+    # when
+    result = notify_print_job(job, ses_client=RejectingSes())
+
+    # then
+    assert result.outcome == NotifyOutcome.FAILED
+    assert "printme notify ClientError MessageRejected" in caplog.text
+    assert code not in caplog.text
+    assert "DO-NOT-LOG" not in caplog.text
+    assert SENDER not in caplog.text
+    job.refresh_from_db()
+    assert job.status == PrintJobStatus.PENDING_EMAIL
+    assert job.code_ciphertext == ciphertext
+
+
+@override_settings(PRINTME_EMAIL_BACKEND="ses")
+def test_ses_failure_without_an_error_code_logs_the_class_only(
+    printme_settings, caplog
+):
+    # given
+    job, _storage = _accepted_job()
+    code = open_access_code(job.code_ciphertext)
+    caplog.set_level("INFO", logger="saleor.printme")
+    client = FakeSes(fail=True)
+
+    # when
+    result = notify_print_job(job, ses_client=client)
+
+    # then
+    assert result.outcome == NotifyOutcome.FAILED
+    assert "printme notify RuntimeError" in caplog.text
+    assert "ses unavailable" not in caplog.text
+    assert code not in caplog.text
+    job.refresh_from_db()
+    assert job.status == PrintJobStatus.PENDING_EMAIL
+    assert job.code_ciphertext
 
 
 @override_settings(
